@@ -14,20 +14,40 @@ Plaintext env files stay local and git-ignored; only AES-256-GCM encrypted `.enc
 
 ## Installation
 
-Requires Node.js **18.17+**.
+Requires Node.js **20.19+** (needed to build the dashboard; the CLI alone runs on 18.17+).
 
 ```bash
 git clone https://github.com/zubayerhimel/secretly.git
 cd secretly
-npm install
-npm run build:ui    # builds the web dashboard (needs Node 20.19+; the CLI itself runs on 18.17+)
+npm run setup       # installs CLI + dashboard dependencies and builds the dashboard
 npm link            # exposes the `dotenv-vault-cli` command globally
 dotenv-vault-cli --help
 ```
 
-`npm run setup` does all three install/build steps in one go.
+`npm run setup` is the same as running these one by one:
+
+```bash
+npm install                 # CLI dependencies
+npm --prefix ui install     # dashboard dependencies
+npm run build:ui            # builds the dashboard into ui/dist
+```
+
+Re-run `npm run build:ui` after pulling changes to the dashboard code.
+
+> **Windows PowerShell:** if you get "running scripts is disabled on this system", use `npm.cmd`
+> instead of `npm` (e.g. `npm.cmd run setup`, `npm.cmd link`), or run the commands from Command Prompt.
 
 To uninstall the global link: `npm unlink -g dotenv-vault-cli`.
+
+## Quick start
+
+```bash
+cd path/to/your-project
+dotenv-vault-cli init        # creates .env-vault.json and updates .gitignore
+dotenv-vault-cli ui          # opens the dashboard in your browser
+```
+
+Prefer the terminal? Everything in the dashboard is also available as a CLI command (see below).
 
 ## Commands
 
@@ -234,9 +254,28 @@ Each `.enc` file is a JSON envelope:
 
 ## Web dashboard
 
-```bash
-dotenv-vault-cli ui            # opens http://127.0.0.1:<random port>/?token=...
-```
+### Opening the dashboard
+
+1. Make sure you ran `npm run setup` (or `npm run build:ui`) once in this repository.
+2. In a terminal, go to the project whose env files you want to manage (the folder with
+   `.env-vault.json`, or any folder if you want to create one from the dashboard).
+3. Run:
+
+   ```bash
+   dotenv-vault-cli ui                      # random free port, opens your browser
+   dotenv-vault-cli ui --port 4600          # fixed port
+   dotenv-vault-cli ui --no-open            # just print the URL
+   ```
+
+4. The terminal prints a URL like `http://127.0.0.1:53412/?token=3f9c…`. Your browser opens it
+   automatically; if it does not, copy the **full** URL (including `?token=`) into your browser.
+5. Leave the terminal open while you use the dashboard. Press **Ctrl+C** to stop it.
+
+Each run creates a new token, so old URLs stop working after a restart. If the page says
+"Session token missing or expired", open the URL from the current run again. If it says the
+dashboard assets are not built, run `npm run build:ui` in this repository.
+
+### What it does
 
 A local dashboard built with React, [shadcn/ui](https://ui.shadcn.com) (Base UI primitives) and
 Tailwind. It shows:
