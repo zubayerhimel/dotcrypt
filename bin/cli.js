@@ -2,47 +2,29 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { createRequire } from 'node:module';
-import { Command } from 'commander';
+import { Command, InvalidArgumentError } from 'commander';
 import chalk from 'chalk';
 import prompts from 'prompts';
 
+import { CONFIG_FILENAME, DEFAULT_ENVIRONMENTS, listEnvironments, loadConfig, resolveEnvironment } from '../src/config.js';
+import { ConfirmationRequiredError, VaultError, fileExists, hasDifferences, sanitizeForTerminal } from '../src/utils.js';
 import {
-  CONFIG_FILENAME,
-  DEFAULT_ENVIRONMENTS,
-  createConfig,
-  listEnvironments,
-  loadConfig,
-  resolveEnvironment,
-  saveConfig,
-} from '../src/config.js';
-import {
-  DecryptionError,
-  EnvelopeFormatError,
-  decrypt,
-  encrypt,
-  parseEnvelope,
-  serializeEnvelope,
-} from '../src/crypto.js';
-import {
-  VaultError,
-  buffersEqual,
-  diffEnv,
-  ensureGitignore,
-  fileExists,
-  gitStatusOf,
-  hasDifferences,
-  parseEnv,
-  safeReadFile,
-  safeWriteFile,
-  sanitizeForTerminal,
-} from '../src/utils.js';
+  decryptEnvironment,
+  diffEnvironment,
+  encryptEnvironment,
+  initVault,
+  loadEnvelope,
+  newPasswordProblem,
+  rotateEnvironmentKey,
+  verifyPassword,
+} from '../src/vault.js';
+import { openBrowser, startUiServer } from '../src/server.js';
 
 const require = createRequire(import.meta.url);
 const pkg = require('../package.json');
 
 const PASSWORD_ENV = 'DOTENV_VAULT_PASSWORD';
 const NEW_PASSWORD_ENV = 'DOTENV_VAULT_NEW_PASSWORD';
-const MIN_PASSWORD_LENGTH = 12;
 
 const log = {
   info: (msg) => console.log(msg),
@@ -72,14 +54,6 @@ async function confirmOrAbort(message, { force = false } = {}) {
   }
   const { ok } = await ask({ type: 'confirm', name: 'ok', message, initial: false });
   if (!ok) throw new VaultError('Aborted. No files were changed.');
-}
-
-function newPasswordProblem(password) {
-  if (typeof password !== 'string' || password.length < MIN_PASSWORD_LENGTH) {
-    return `Password must be at least ${MIN_PASSWORD_LENGTH} characters long.`;
-  }
-  if (password.trim() !== password) return 'Password must not start or end with whitespace.';
-  return null;
 }
 
 function assertNewPassword(password) {
@@ -147,44 +121,6 @@ async function pickEnvironment(ctx, requested) {
   throw new VaultError('No environment specified.', { hint: `Use --env <${names.join('|')}>.` });
 }
 
-function loadEnvelope(ctx, env) {
-  if (!fileExists(env.encPath)) {
-    throw new VaultError(`Encrypted file ${env.encryptedFile} not found for environment "${env.name}".`, {
-      hint: `Run "dotenv-vault-cli encrypt -e ${env.name}" first, or pull the latest changes from Git.`,
-    });
-  }
-  try {
-    return parseEnvelope(safeReadFile(ctx.root, env.encPath));
-  } catch (err) {
-    if (err instanceof EnvelopeFormatError) {
-      throw new VaultError(`${env.encryptedFile} is not a valid vault file: ${err.message}`);
-    }
-    throw err;
-  }
-}
-
-function decryptOrFail(envelope, password, env) {
-  try {
-    return decrypt(envelope, password, { expectedEnvironment: env.name });
-  } catch (err) {
-    if (err instanceof DecryptionError) throw new VaultError(err.message, { exitCode: 2 });
-    throw err;
-  }
-}
-
-function warnIfPlaintextExposed(root, relFile) {
-  const status = gitStatusOf(root, relFile);
-  if (!status.inRepo) return;
-  if (status.tracked) {
-    log.warn(
-      chalk.bold(`${relFile} is TRACKED by Git! `) +
-        `Remove it with "git rm --cached ${relFile}" and consider rotating the secrets it contains.`,
-    );
-  } else if (!status.ignored) {
-    log.warn(`${relFile} is not ignored by Git. Run "dotenv-vault-cli init" or add it to .gitignore.`);
-  }
-}
-
 function summarizeDiff({ added, removed, changed }) {
   return `${added.length} added, ${removed.length} removed, ${changed.length} changed`;
 }
@@ -195,15 +131,33 @@ function printDiff(diff, { addedLabel, removedLabel }) {
   for (const key of diff.changed) log.info(chalk.yellow(`  ~ ${sanitizeForTerminal(key)}`) + chalk.dim('  (value differs)'));
 }
 
+function printWarnings(warnings = []) {
+  for (const warning of warnings) log.warn(warning);
+}
+
+/** Runs an operation; on an "overwrite" confirmation, shows the key diff, asks, and retries with overwrite. */
+async function withOverwriteConfirmation(run, { force, diffLabels }) {
+  try {
+    return run(force);
+  } catch (err) {
+    if (!(err instanceof ConfirmationRequiredError) || err.reason !== 'overwrite') throw err;
+    log.info(`Changes: ${summarizeDiff(err.diff)}`);
+    printDiff(err.diff, diffLabels);
+    await confirmOrAbort(err.message);
+    return run(true);
+  }
+}
+
 // ---------------------------------------------------------------------------
 // Commands
 // ---------------------------------------------------------------------------
 
 async function initCommand(opts) {
   const root = process.cwd();
-  const configPath = path.join(root, CONFIG_FILENAME);
-  if (fs.existsSync(configPath)) {
+  let overwrite = Boolean(opts.force);
+  if (fs.existsSync(path.join(root, CONFIG_FILENAME))) {
     await confirmOrAbort(`${CONFIG_FILENAME} already exists. Overwrite it?`, { force: opts.force });
+    overwrite = true;
   }
 
   let name = opts.name ?? path.basename(root);
@@ -236,18 +190,11 @@ async function initCommand(opts) {
     }
   }
 
-  const config = createConfig({ name, environments, defaultEnvironment });
-  saveConfig(root, config);
+  const { config, gitignoreAdded, warnings } = initVault(root, { name, environments, defaultEnvironment, overwrite });
   log.success(`Wrote ${CONFIG_FILENAME}`);
-
-  const plaintextFiles = Object.values(config.environments).map((env) => env.file);
-  const added = ensureGitignore(root, plaintextFiles);
-  if (added.length) log.success(`Updated .gitignore with: ${added.join(', ')}`);
+  if (gitignoreAdded.length) log.success(`Updated .gitignore with: ${gitignoreAdded.join(', ')}`);
   else log.success('.gitignore already protects plaintext env files');
-
-  for (const file of ['.env', ...plaintextFiles]) {
-    if (fs.existsSync(path.join(root, file))) warnIfPlaintextExposed(root, file);
-  }
+  printWarnings(warnings);
 
   log.info('');
   log.info(chalk.bold('Environments:'));
@@ -260,122 +207,88 @@ async function initCommand(opts) {
   log.info(`  1. Create your local env file, e.g. ${config.environments[config.defaultEnvironment].file}`);
   log.info(`  2. dotenv-vault-cli encrypt -e ${config.defaultEnvironment}`);
   log.info(`  3. git add ${CONFIG_FILENAME} .gitignore *.enc && git commit`);
+  log.info(`  Or run ${chalk.cyan('dotenv-vault-cli ui')} for a visual dashboard.`);
 }
 
 async function encryptCommand(opts) {
   const ctx = loadConfig();
   const env = await pickEnvironment(ctx, opts.env);
-
   if (!fileExists(env.plainPath)) {
     throw new VaultError(`Local file ${env.file} not found for environment "${env.name}".`);
   }
-  warnIfPlaintextExposed(ctx.root, env.file);
-  const plaintext = safeReadFile(ctx.root, env.plainPath);
 
-  try {
-    let existing = null;
-    if (fileExists(env.encPath)) {
-      try {
-        existing = loadEnvelope(ctx, env);
-      } catch (err) {
-        if (!opts.force) throw new VaultError(err.message, { hint: 'Use --force to replace it.' });
-        log.warn(`Replacing unreadable ${env.encryptedFile} because --force was given.`);
-      }
+  // Inspect the existing vault file before prompting so we know whether this is a new password.
+  let hasValidVault = false;
+  if (fileExists(env.encPath)) {
+    try {
+      loadEnvelope(ctx, env);
+      hasValidVault = true;
+    } catch (err) {
+      if (!opts.force) throw new VaultError(err.message, { hint: 'Use --force to replace it.' });
     }
-
-    const password = await resolvePassword({
-      flagValue: opts.password,
-      flagName: '--password',
-      envVar: PASSWORD_ENV,
-      isNew: !existing,
-      message: existing ? `Vault password for "${env.name}"` : `Choose a new vault password for "${env.name}"`,
-    });
-
-    if (existing) {
-      let previous = null;
-      try {
-        previous = decrypt(existing, password, { expectedEnvironment: env.name });
-      } catch (err) {
-        if (!(err instanceof DecryptionError)) throw err;
-        // Guards against a teammate accidentally splitting the vault onto a different password.
-        if (!opts.force) {
-          throw new VaultError(`Cannot verify the password against the existing ${env.encryptedFile}. ${err.message}`, {
-            exitCode: 2,
-            hint: 'To change the password use "dotenv-vault-cli rotate-key". Use --force to replace the file anyway.',
-          });
-        }
-        assertNewPassword(password);
-        log.warn(`Replacing ${env.encryptedFile} with a different password because --force was given.`);
-      }
-
-      if (previous) {
-        try {
-          if (buffersEqual(previous, plaintext)) {
-            log.success(`${env.encryptedFile} is already up to date. Nothing to do.`);
-            return;
-          }
-          const diff = diffEnv(parseEnv(previous), parseEnv(plaintext));
-          log.info(`Changes vs. ${env.encryptedFile}: ${summarizeDiff(diff)}`);
-          printDiff(diff, { addedLabel: 'new in local', removedLabel: 'will be removed from vault' });
-        } finally {
-          previous.fill(0);
-        }
-        await confirmOrAbort(`Overwrite ${env.encryptedFile} with the contents of ${env.file}?`, { force: opts.force });
-      }
-    }
-
-    const envelope = encrypt(plaintext, password, { environment: env.name, sourceFile: env.file });
-    safeWriteFile(ctx.root, env.encPath, serializeEnvelope(envelope), { mode: 0o644 });
-    log.success(`Encrypted ${env.file} -> ${env.encryptedFile}`);
-    log.dim(`Commit ${env.encryptedFile} to share it with your team.`);
-  } finally {
-    plaintext.fill(0);
   }
+
+  const password = await resolvePassword({
+    flagValue: opts.password,
+    flagName: '--password',
+    envVar: PASSWORD_ENV,
+    isNew: !hasValidVault,
+    message: hasValidVault ? `Vault password for "${env.name}"` : `Choose a new vault password for "${env.name}"`,
+  });
+
+  let result;
+  try {
+    result = await withOverwriteConfirmation(
+      (overwrite) => encryptEnvironment(ctx, env.name, password, { overwrite, replaceExisting: Boolean(opts.force) }),
+      { force: Boolean(opts.force), diffLabels: { addedLabel: 'new in local', removedLabel: 'will be removed from vault' } },
+    );
+  } catch (err) {
+    if (err instanceof ConfirmationRequiredError && err.reason === 'password-mismatch') {
+      throw new VaultError(err.message, {
+        exitCode: 2,
+        hint: 'To change the password use "dotenv-vault-cli rotate-key". Use --force to replace the file anyway.',
+      });
+    }
+    throw err;
+  }
+
+  printWarnings(result.warnings);
+  if (result.status === 'unchanged') {
+    log.success(`${env.encryptedFile} is already up to date. Nothing to do.`);
+    return;
+  }
+  log.success(`Encrypted ${env.file} -> ${env.encryptedFile}`);
+  log.dim(`Commit ${env.encryptedFile} to share it with your team.`);
 }
 
 async function decryptCommand(opts) {
   const ctx = loadConfig();
   const env = await pickEnvironment(ctx, opts.env);
-  const envelope = loadEnvelope(ctx, env);
+  loadEnvelope(ctx, env); // fail fast before asking for a password
   const password = await resolvePassword({
     flagValue: opts.password,
     flagName: '--password',
     envVar: PASSWORD_ENV,
     message: `Vault password for "${env.name}"`,
   });
-  const plaintext = decryptOrFail(envelope, password, env);
 
-  try {
-    if (fileExists(env.plainPath)) {
-      const current = safeReadFile(ctx.root, env.plainPath);
-      try {
-        if (buffersEqual(current, plaintext)) {
-          log.success(`${env.file} is already up to date. Nothing to do.`);
-          return;
-        }
-        if (!opts.force) {
-          const diff = diffEnv(parseEnv(plaintext), parseEnv(current));
-          log.info(`${env.file} differs from the vault: ${summarizeDiff(diff)}`);
-          printDiff(diff, { addedLabel: 'local only — will be lost', removedLabel: 'will be restored from vault' });
-          await confirmOrAbort(`Overwrite local ${env.file}?`);
-        }
-      } finally {
-        current.fill(0);
-      }
-    }
+  const result = await withOverwriteConfirmation(
+    (overwrite) => decryptEnvironment(ctx, env.name, password, { overwrite }),
+    {
+      force: Boolean(opts.force),
+      diffLabels: { addedLabel: 'local only — will be lost', removedLabel: 'will be restored from vault' },
+    },
+  );
 
-    safeWriteFile(ctx.root, env.plainPath, plaintext, { mode: 0o600 });
-    log.success(`Decrypted ${env.encryptedFile} -> ${env.file}`);
-    warnIfPlaintextExposed(ctx.root, env.file);
-  } finally {
-    plaintext.fill(0);
-  }
+  if (result.status === 'unchanged') log.success(`${env.file} is already up to date. Nothing to do.`);
+  else log.success(`Decrypted ${env.encryptedFile} -> ${env.file}`);
+  printWarnings(result.warnings);
 }
 
 async function rotateKeyCommand(opts) {
   const ctx = loadConfig();
   const env = await pickEnvironment(ctx, opts.env);
-  const envelope = loadEnvelope(ctx, env);
+  loadEnvelope(ctx, env);
 
   const oldPassword = await resolvePassword({
     flagValue: opts.oldPassword,
@@ -383,64 +296,33 @@ async function rotateKeyCommand(opts) {
     envVar: PASSWORD_ENV,
     message: `Current password for "${env.name}"`,
   });
-  const plaintext = decryptOrFail(envelope, oldPassword, env);
+  verifyPassword(ctx, env.name, oldPassword);
 
-  try {
-    const newPassword = await resolvePassword({
-      flagValue: opts.newPassword,
-      flagName: '--new-password',
-      envVar: NEW_PASSWORD_ENV,
-      isNew: true,
-      message: `New password for "${env.name}"`,
-    });
-    if (newPassword === oldPassword) throw new VaultError('The new password must differ from the current password.');
+  const newPassword = await resolvePassword({
+    flagValue: opts.newPassword,
+    flagName: '--new-password',
+    envVar: NEW_PASSWORD_ENV,
+    isNew: true,
+    message: `New password for "${env.name}"`,
+  });
 
-    const rotated = encrypt(plaintext, newPassword, { environment: env.name, sourceFile: env.file });
-
-    // Verify the new file round-trips before replacing the old one.
-    const check = decrypt(rotated, newPassword, { expectedEnvironment: env.name });
-    const ok = buffersEqual(check, plaintext);
-    check.fill(0);
-    if (!ok) throw new VaultError('Verification of the re-encrypted data failed. The original file was not modified.');
-
-    safeWriteFile(ctx.root, env.encPath, serializeEnvelope(rotated), { mode: 0o644 });
-    log.success(`Rotated password for ${env.encryptedFile} (fresh salt and IV).`);
-    log.dim('Commit the updated file and share the new password with your team over a secure channel.');
-  } finally {
-    plaintext.fill(0);
-  }
+  rotateEnvironmentKey(ctx, env.name, oldPassword, newPassword);
+  log.success(`Rotated password for ${env.encryptedFile} (fresh salt and IV).`);
+  log.dim('Commit the updated file and share the new password with your team over a secure channel.');
 }
 
 async function diffCommand(opts) {
   const ctx = loadConfig();
   const env = await pickEnvironment(ctx, opts.env);
-  const envelope = loadEnvelope(ctx, env);
+  loadEnvelope(ctx, env);
   const password = await resolvePassword({
     flagValue: opts.password,
     flagName: '--password',
     envVar: PASSWORD_ENV,
     message: `Vault password for "${env.name}"`,
   });
-  const plaintext = decryptOrFail(envelope, password, env);
 
-  let vaultVars;
-  let localVars = {};
-  try {
-    vaultVars = parseEnv(plaintext);
-  } finally {
-    plaintext.fill(0);
-  }
-  const localExists = fileExists(env.plainPath);
-  if (localExists) {
-    const local = safeReadFile(ctx.root, env.plainPath);
-    try {
-      localVars = parseEnv(local);
-    } finally {
-      local.fill(0);
-    }
-  }
-
-  const diff = diffEnv(vaultVars, localVars);
+  const { diff, localExists } = diffEnvironment(ctx, env.name, password);
   log.info(chalk.bold(`Comparing ${env.file} (local) with ${env.encryptedFile} (vault)`));
   if (!localExists) log.warn(`${env.file} does not exist locally; treating it as empty.`);
 
@@ -452,6 +334,34 @@ async function diffCommand(opts) {
   log.info('');
   log.info(`${summarizeDiff(diff)}, ${diff.unchanged} unchanged`);
   if (opts.exitCode) process.exitCode = 1;
+}
+
+async function uiCommand(opts) {
+  const timestamp = () => new Date().toLocaleTimeString();
+  const ui = await startUiServer({
+    port: opts.port,
+    onLog: (msg) => log.dim(`[${timestamp()}] ${sanitizeForTerminal(msg)}`),
+  });
+
+  log.success(`Dashboard running for ${ui.projectDir}`);
+  log.info(`  ${chalk.cyan(ui.url)}`);
+  log.dim('  The URL contains a secret session token. Do not share it. Press Ctrl+C to stop.');
+  if (opts.open) openBrowser(ui.url);
+
+  await new Promise((resolve) => {
+    const stop = () => {
+      log.dim('\nStopping dashboard…');
+      ui.close().then(resolve);
+    };
+    process.once('SIGINT', stop);
+    process.once('SIGTERM', stop);
+  });
+}
+
+function parsePort(value) {
+  const port = Number(value);
+  if (!Number.isInteger(port) || port < 0 || port > 65535) throw new InvalidArgumentError('Port must be 0-65535.');
+  return port;
 }
 
 // ---------------------------------------------------------------------------
@@ -510,6 +420,13 @@ program
   .option('-p, --password <password>', 'vault password (prompted if omitted)')
   .option('--exit-code', 'exit with status 1 when differences are found')
   .action(diffCommand);
+
+program
+  .command('ui')
+  .description('open a local web dashboard (bound to 127.0.0.1, token-protected)')
+  .option('--port <port>', 'port to listen on (default: a random free port)', parsePort, 0)
+  .option('--no-open', 'do not open the browser automatically')
+  .action(uiCommand);
 
 try {
   await program.parseAsync(process.argv);

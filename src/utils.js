@@ -9,11 +9,25 @@ export const GITIGNORE_HEADER = '# dotenv-vault-cli: never commit plaintext envi
 export const BASE_GITIGNORE_RULES = Object.freeze(['.env', '.env.*', '!.env.*.enc']);
 
 export class VaultError extends Error {
-  constructor(message, { exitCode = 1, hint } = {}) {
+  constructor(message, { exitCode = 1, hint, code = 'VAULT_ERROR' } = {}) {
     super(message);
     this.name = 'VaultError';
     this.exitCode = exitCode;
     this.hint = hint;
+    this.code = code;
+  }
+}
+
+/**
+ * Raised when an operation would discard data and needs explicit approval.
+ * `reason` is one of: "overwrite", "password-mismatch", "unreadable-vault", "config-exists".
+ */
+export class ConfirmationRequiredError extends VaultError {
+  constructor(message, { reason, diff, hint } = {}) {
+    super(message, { code: 'CONFIRMATION_REQUIRED', hint });
+    this.name = 'ConfirmationRequiredError';
+    this.reason = reason;
+    this.diff = diff;
   }
 }
 
@@ -157,7 +171,7 @@ export function isCoveredByBaseRules(relPath) {
  * Never removes or rewrites existing user rules.
  * @returns {string[]} rules that were added.
  */
-export function ensureGitignore(root, plaintextFiles = []) {
+export function ensureGitignore(root, plaintextFiles = [], { dryRun = false } = {}) {
   const gitignorePath = path.join(root, '.gitignore');
   const content = fileExists(gitignorePath) ? safeReadFile(root, gitignorePath).toString('utf8') : '';
   const existing = new Set(content.split(/\r?\n/).map((line) => line.trim()));
@@ -170,7 +184,7 @@ export function ensureGitignore(root, plaintextFiles = []) {
       .map((file) => `/${file}`),
   ];
   const missing = [...new Set(wanted)].filter((rule) => !existing.has(rule));
-  if (missing.length === 0) return [];
+  if (missing.length === 0 || dryRun) return missing;
 
   const eol = content.includes('\r\n') ? '\r\n' : '\n';
   let block = '';

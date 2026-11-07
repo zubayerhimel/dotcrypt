@@ -20,9 +20,12 @@ Requires Node.js **18.17+**.
 git clone https://github.com/zubayerhimel/secretly.git
 cd secretly
 npm install
+npm run build:ui    # builds the web dashboard (needs Node 20.19+; the CLI itself runs on 18.17+)
 npm link            # exposes the `dotenv-vault-cli` command globally
 dotenv-vault-cli --help
 ```
+
+`npm run setup` does all three install/build steps in one go.
 
 To uninstall the global link: `npm unlink -g dotenv-vault-cli`.
 
@@ -35,6 +38,7 @@ To uninstall the global link: `npm unlink -g dotenv-vault-cli`.
 | `decrypt [-e env] [-p password] [-f]` | Decrypt the `.enc` file into the mapped local file. |
 | `rotate-key [-e env] [-o old] [-n new]` | Re-encrypt with a new password, a fresh salt and a fresh IV. |
 | `diff [-e env] [-p password] [--exit-code]` | Show **key names** that were added / removed / changed. Values are never printed. |
+| `ui [--port n] [--no-open]` | Open the local web dashboard (see below). |
 
 If `-e` is omitted you are prompted to pick an environment (non-interactive runs fall back to
 `defaultEnvironment`).
@@ -228,12 +232,67 @@ Each `.enc` file is a JSON envelope:
 - Not a replacement for a full secrets manager (per-user access control, audit logs, automatic
   rotation). It is designed for small, trusted teams.
 
+## Web dashboard
+
+```bash
+dotenv-vault-cli ui            # opens http://127.0.0.1:<random port>/?token=...
+```
+
+A local dashboard built with React, [shadcn/ui](https://ui.shadcn.com) (Base UI primitives) and
+Tailwind. It shows:
+
+- every environment in `.env-vault.json`: local file and vault file status, sizes, last-modified /
+  last-encrypted times, and the default environment
+- a health badge per environment (Synced, Local changed, Not encrypted, Not decrypted, Vault
+  unreadable, Plaintext tracked)
+- Git safety: whether plaintext files are ignored or (dangerously) tracked, whether `.enc` files are
+  committed, and a one-click fix for missing `.gitignore` rules
+- an activity log for the session
+
+You can initialize a vault, add environments, set the default, and run encrypt, decrypt, diff and
+rotate-key from the dashboard. Overwrites show the key-name diff and need confirmation, just like
+the CLI. The dashboard refreshes every 5 seconds, so changes made in the terminal or by `git pull`
+show up automatically.
+
+### Dashboard security model
+
+- **Loopback only.** The server binds to `127.0.0.1` and never to `0.0.0.0`.
+- **Per-run secret token.** A random 256-bit token is generated on every start and required as a
+  bearer token on every API call, compared in constant time. The browser moves it from the URL into
+  `sessionStorage` and removes it from the address bar. Do not share the printed URL.
+- **DNS-rebinding and CSRF protection.** Requests whose `Host` is not `127.0.0.1:<port>` or
+  `localhost:<port>` are rejected (421). Writes require `Content-Type: application/json`, a matching
+  `Origin`, and a same-origin `Sec-Fetch-Site`.
+- **Strict headers.** A restrictive CSP (`script-src 'self'`, `frame-ancestors 'none'`, …),
+  `X-Frame-Options: DENY`, `nosniff`, `no-referrer`, and `Cache-Control: no-store` on API responses.
+- **No secret values leave the server.** The API returns metadata and key names only. Passwords are
+  sent per request, held only in the tab's memory (the **Lock** button clears them), and never
+  stored in `localStorage` or on disk. Request bodies are capped at 64 KB.
+
+### Developing the dashboard
+
+```bash
+# terminal 1, inside any project with a vault
+dotenv-vault-cli ui --port 4600 --no-open        # note the token it prints
+# terminal 2, in this repository
+VAULT_API_PORT=4600 npm run dev:ui               # Vite on http://localhost:5173, /api is proxied
+# open http://localhost:5173/?token=<token>
+```
+
+UI code lives in `ui/src` (`App.tsx`, `components/`, `lib/api.ts`). Add more shadcn components with
+`npx shadcn@latest add <component>` from the `ui/` directory.
+
 ## Development
 
 ```bash
 npm install
 npm test
 ```
+
+Source layout: `src/crypto.js` (envelope format and AES-256-GCM/scrypt), `src/config.js`
+(`.env-vault.json`), `src/utils.js` (filesystem and Git safety), `src/vault.js` (operations shared
+by the CLI and dashboard), `src/server.js` (dashboard server), `bin/cli.js` (Commander CLI) and
+`ui/` (dashboard).
 
 ## License
 

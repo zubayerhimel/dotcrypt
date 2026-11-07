@@ -10,11 +10,16 @@
   "files": [
     "bin/",
     "src/",
+    "ui/dist/",
     "README.md",
     "LICENSE"
   ],
   "scripts": {
-    "test": "node --test"
+    "test": "node --test",
+    "setup": "npm install && npm --prefix ui install && npm run build:ui",
+    "build:ui": "npm --prefix ui run build",
+    "dev:ui": "npm --prefix ui run dev",
+    "prepack": "npm run build:ui"
   },
   "keywords": [
     "dotenv",

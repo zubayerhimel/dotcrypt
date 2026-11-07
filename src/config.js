@@ -125,6 +125,7 @@ export function loadConfig(startDir = process.cwd()) {
   const root = findProjectRoot(startDir);
   if (!root) {
     throw new VaultError(`No ${CONFIG_FILENAME} found in ${path.resolve(startDir)} or any parent directory.`, {
+      code: 'NO_CONFIG',
       hint: 'Run "dotenv-vault-cli init" at the root of your project.',
     });
   }
@@ -151,6 +152,7 @@ export function listEnvironments(config) {
 export function resolveEnvironment({ root, config }, name) {
   if (!Object.hasOwn(config.environments, name)) {
     throw new VaultError(`Unknown environment "${name}".`, {
+      code: 'NOT_FOUND',
       hint: `Available environments: ${listEnvironments(config).join(', ')}`,
     });
   }
