@@ -1,0 +1,38 @@
+{
+  "name": "dotenv-vault-cli",
+  "version": "1.0.0",
+  "description": "Securely sync multiple .env environments across machines via Git using AES-256-GCM encrypted files.",
+  "type": "module",
+  "main": "src/crypto.js",
+  "bin": {
+    "dotenv-vault-cli": "bin/cli.js"
+  },
+  "files": [
+    "bin/",
+    "src/",
+    "README.md",
+    "LICENSE"
+  ],
+  "scripts": {
+    "test": "node --test"
+  },
+  "keywords": [
+    "dotenv",
+    "env",
+    "secrets",
+    "vault",
+    "encryption",
+    "aes-256-gcm",
+    "cli"
+  ],
+  "license": "MIT",
+  "engines": {
+    "node": ">=18.17"
+  },
+  "dependencies": {
+    "chalk": "^5.3.0",
+    "commander": "^12.1.0",
+    "dotenv": "^16.4.5",
+    "prompts": "^2.4.2"
+  }
+}

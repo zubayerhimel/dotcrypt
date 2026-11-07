@@ -1,0 +1,8 @@
+node_modules/
+npm-debug.log*
+coverage/
+
+# dotenv-vault-cli: never commit plaintext environment files
+.env
+.env.*
+!.env.*.enc
