@@ -9,12 +9,16 @@ import { fileURLToPath } from 'node:url';
 const CLI = fileURLToPath(new URL('../bin/cli.js', import.meta.url));
 const PASSWORD = 'correct horse battery';
 
+// A FORCE_COLOR from the developer's terminal would override NO_COLOR and add color codes to the output.
+const { FORCE_COLOR, ...baseEnv } = process.env;
+const childEnv = (extra = {}) => ({ ...baseEnv, NO_COLOR: '1', ...extra });
+
 function cli(cwd, args, password, extraEnv = {}) {
   return spawnSync(process.execPath, [CLI, ...args], {
     cwd,
     encoding: 'utf8',
     stdio: ['ignore', 'pipe', 'pipe'],
-    env: { ...process.env, DOTCRYPT_PASSWORD: password, NO_COLOR: '1', ...extraEnv },
+    env: childEnv({ DOTCRYPT_PASSWORD: password, ...extraEnv }),
   });
 }
 
@@ -84,7 +88,7 @@ test('set, get and unset edit single variables in the vault', () => {
     cwd: root,
     encoding: 'utf8',
     input: 's3cr3t "quoted"\n',
-    env: { ...process.env, DOTCRYPT_PASSWORD: PASSWORD, NO_COLOR: '1' },
+    env: childEnv({ DOTCRYPT_PASSWORD: PASSWORD }),
   });
   assert.equal(piped.status, 0, piped.stderr);
   assert.doesNotMatch(piped.stdout + piped.stderr, /s3cr3t/);
@@ -108,7 +112,7 @@ test('hooks block plaintext commits, keep existing hooks and announce incoming c
     spawnSync('git', ['-c', 'user.name=t', '-c', 'user.email=t@t', '-c', 'commit.gpgsign=false', ...args], {
       cwd: root,
       encoding: 'utf8',
-      env: { ...process.env, NO_COLOR: '1', ...env },
+      env: childEnv(env),
     });
 
   git('init', '-q');
