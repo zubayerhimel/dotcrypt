@@ -1,0 +1,2 @@
+# Overrides ui/.gitignore for npm, which would otherwise drop the built dashboard (dist) from the package.
+node_modules
