@@ -147,3 +147,24 @@ test('hooks block plaintext commits, keep existing hooks and announce incoming c
   assert.equal(fs.readFileSync(preCommit, 'utf8'), '#!/bin/sh\necho existing-hook-ran\n');
   assert.equal(fs.existsSync(path.join(root, '.git', 'hooks', 'post-merge')), false);
 });
+
+test('check lists variables missing from some environments without printing values', () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'dotcrypt-cli-'));
+  assert.equal(cli(root, ['init', '-y', '--envs', 'development,staging,production'], PASSWORD).status, 0);
+  fs.writeFileSync(path.join(root, '.env.development'), 'A=1\nB=secret-b\nNEW=1\n');
+  fs.writeFileSync(path.join(root, '.env.staging'), 'A=1\nB=2\n');
+  fs.writeFileSync(path.join(root, '.env.production'), 'A=1\n');
+  for (const env of ['development', 'staging']) assert.equal(cli(root, ['encrypt', '-e', env], PASSWORD).status, 0);
+  assert.equal(cli(root, ['encrypt', '-e', 'production'], 'another long password').status, 0);
+
+  const res = cli(root, ['check'], PASSWORD);
+  assert.equal(res.status, 1, res.stderr);
+  assert.match(res.stderr, /Skipped production: wrong password/);
+  assert.match(res.stdout, /NEW\s+missing in staging/);
+  assert.doesNotMatch(res.stdout + res.stderr, /secret-b/);
+
+  assert.equal(cli(root, ['set', 'NEW=1', '-e', 'staging'], PASSWORD).status, 0);
+  const ok = cli(root, ['check', '-e', 'development,staging'], PASSWORD);
+  assert.equal(ok.status, 0, ok.stderr);
+  assert.match(ok.stdout, /All 3 variables exist in every environment/);
+});

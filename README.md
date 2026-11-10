@@ -70,6 +70,7 @@ Prefer the terminal? Everything in the dashboard is also available as a CLI comm
 | `get <KEY> [-e env] [-p password]` | Print one variable from the vault. Exits 1 if it is not set. |
 | `unset <KEY>... [-e env] [-p password]` | Remove variables from the vault and your local file. |
 | `run [-e env] [-p password] [--override] -- <command>` | Run a command with the decrypted variables set. Nothing is written to disk. |
+| `check [-e a,b,c] [-p password]` | List variables that exist in one environment but are missing in another (names only). Exits 1 if any are missing. |
 | `hooks install` / `hooks uninstall` | Add Git hooks that block plaintext commits and tell you when to share or download changes. |
 | `ui [--port n] [--no-open]` | Open the local web dashboard (see below). |
 
@@ -353,6 +354,9 @@ Tailwind. It shows:
   teammate pushed something newer
 - Git safety: whether plaintext files are ignored or (dangerously) tracked, and a one-click fix for
   missing `.gitignore` rules
+- **Missing variables**: compares the variable names of your environments and lists the ones that
+  exist in one but not in another (for example a key you added to development and forgot in
+  production). Values are never shown.
 - an activity log for the session
 
 Less common actions (compare, force share or get, change password, make default) are in each

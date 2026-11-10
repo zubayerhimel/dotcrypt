@@ -354,6 +354,47 @@ export function readEnvironmentVariables(ctx, name, password) {
 }
 
 /**
+ * Compares variable names across environments' vault files to find variables that exist in one
+ * environment but are missing in another. Values are never returned.
+ * `passwords` maps environment name to password; environments without one are reported as "locked".
+ */
+export function compareEnvironments(ctx, passwords = {}, names = listEnvironments(ctx.config)) {
+  const environments = [];
+  const keysByEnv = new Map();
+  for (const name of names) {
+    const env = resolveEnvironment(ctx, name);
+    if (!fileExists(env.encPath)) {
+      environments.push({ name: env.name, state: 'no-vault' });
+      continue;
+    }
+    const password = passwords[env.name];
+    if (typeof password !== 'string' || !password) {
+      environments.push({ name: env.name, state: 'locked' });
+      continue;
+    }
+    try {
+      const keys = Object.keys(readEnvironmentVariables(ctx, env.name, password));
+      keysByEnv.set(env.name, new Set(keys));
+      environments.push({ name: env.name, state: 'compared', count: keys.length });
+    } catch (err) {
+      if (!(err instanceof VaultError)) throw err;
+      environments.push({ name: env.name, state: err.code === 'DECRYPT_FAILED' ? 'wrong-password' : 'unreadable', error: err.message });
+    }
+  }
+
+  const compared = [...keysByEnv.keys()];
+  const allKeys = [...new Set([...keysByEnv.values()].flatMap((keys) => [...keys]))].sort();
+  const missing = [];
+  let shared = 0;
+  for (const key of allKeys) {
+    const missingFrom = compared.filter((name) => !keysByEnv.get(name).has(key));
+    if (missingFrom.length) missing.push({ key, missingFrom, presentIn: compared.filter((name) => !missingFrom.includes(name)) });
+    else shared += 1;
+  }
+  return { environments, compared, missing, shared };
+}
+
+/**
  * Sets and/or removes variables in the shared vault file, and applies the same edit to the local file
  * when it exists. Other lines, comments and formatting are kept.
  * Returns the keys that actually changed; status is "unchanged" when nothing did.

@@ -233,6 +233,13 @@ export function startUiServer({ cwd = process.cwd(), port = 0, onLog = () => {} 
       onLog(`add environment: ${body.name}`);
       return { status: 'created', gitignoreAdded: result.gitignoreAdded };
     }
+    if (pathname === '/api/compare') {
+      const passwords = {};
+      if (body.passwords && typeof body.passwords === 'object') {
+        for (const [name, value] of Object.entries(body.passwords)) if (typeof value === 'string') passwords[name] = value;
+      }
+      return vault.compareEnvironments(context(), passwords);
+    }
     if (pathname === '/api/gitignore') {
       const result = vault.repairGitignore(context());
       onLog('.gitignore repaired');

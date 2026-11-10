@@ -19,6 +19,7 @@ import { ActivityLog, type LogEntry, type LogLevel } from "@/components/activity
 import { EnvCard, needsAttention, type EnvAction } from "@/components/env-card"
 import { HowItWorks } from "@/components/how-it-works"
 import { InitView } from "@/components/init-view"
+import { MissingVariables } from "@/components/missing-variables"
 import { useTheme } from "@/components/theme-provider"
 import {
   AddEnvironmentDialog,
@@ -311,6 +312,14 @@ export function App() {
               onRepairGitignore={onRepairGitignore}
               offline={Boolean(loadError)}
               guide={guideOpen ? <HowItWorks onHide={() => showGuide(false)} /> : null}
+              missingVariables={
+                <MissingVariables
+                  environments={initialized.environments}
+                  passwords={passwords}
+                  onUnlocked={remember}
+                  onWrongPassword={forget}
+                />
+              }
             />
           )}
           <Card>
@@ -437,6 +446,7 @@ function Dashboard({
   onRepairGitignore,
   offline,
   guide,
+  missingVariables,
 }: {
   status: InitializedStatus
   passwords: Record<string, string>
@@ -445,6 +455,7 @@ function Dashboard({
   onRepairGitignore: () => void
   offline: boolean
   guide: React.ReactNode
+  missingVariables: React.ReactNode
 }) {
   const attention = status.environments.filter(needsAttention).length
   const tracked = status.environments.filter((e) => e.git.tracked)
@@ -508,6 +519,8 @@ function Dashboard({
           />
         ))}
       </section>
+
+      {missingVariables}
 
       <p className="text-xs text-muted-foreground">
         Vault created {relativeTime(status.vault.createdAt)} · {status.vault.cipher} · {status.vault.kdf} key derivation ·

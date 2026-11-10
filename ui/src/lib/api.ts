@@ -79,6 +79,19 @@ export type OperationResult = {
 
 export type DiffResult = { environment: string; localExists: boolean; identical: boolean; diff: KeyDiff }
 
+export type CompareResult = {
+  environments: {
+    name: string
+    state: "compared" | "locked" | "no-vault" | "wrong-password" | "unreadable"
+    count?: number
+    error?: string
+  }[]
+  compared: string[]
+  /** Variable names (never values) that exist in some compared environments but not in others. */
+  missing: { key: string; missingFrom: string[]; presentIn: string[] }[]
+  shared: number
+}
+
 export type ConfirmationReason = "overwrite" | "password-mismatch" | "unreadable-vault" | "config-exists"
 
 export class ApiError extends Error {
@@ -152,6 +165,7 @@ export const api = {
   diff: (name: string, body: { password: string }) => request<DiffResult>("POST", envPath(name, "diff"), body),
   rotate: (name: string, body: { oldPassword: string; newPassword: string }) =>
     request<OperationResult>("POST", envPath(name, "rotate"), body),
+  compare: (passwords: Record<string, string>) => request<CompareResult>("POST", "/api/compare", { passwords }),
   setDefault: (name: string) => request<OperationResult>("POST", envPath(name, "default")),
 }
 

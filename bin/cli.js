@@ -18,6 +18,7 @@ import {
 } from '../src/config.js';
 import { ConfirmationRequiredError, VaultError, fileExists, hasDifferences, sanitizeForTerminal } from '../src/utils.js';
 import {
+  compareEnvironments,
   decryptEnvironment,
   diffEnvironment,
   encryptEnvironment,
@@ -444,6 +445,62 @@ async function diffCommand(opts) {
   if (opts.exitCode) process.exitCode = 1;
 }
 
+const SKIP_REASON = {
+  'no-vault': 'no encrypted file',
+  locked: 'no password',
+  'wrong-password': 'wrong password',
+  unreadable: 'unreadable',
+};
+
+async function checkCommand(opts) {
+  const ctx = loadConfig();
+  const names = opts.env ? opts.env.split(',').map((n) => n.trim()).filter(Boolean) : listEnvironments(ctx.config);
+  const withVault = names.map((name) => resolveEnvironment(ctx, name)).filter((env) => fileExists(env.encPath));
+  if (withVault.length < 2) {
+    throw new VaultError('Need at least two environments with an encrypted file to compare.', {
+      hint: 'Share more environments first with "dotcrypt encrypt -e <env>".',
+    });
+  }
+
+  const passwords = {};
+  if (opts.password !== undefined || process.env[PASSWORD_ENV]) {
+    const password = await resolvePassword({ flagValue: opts.password, flagName: '--password', envVar: PASSWORD_ENV, message: '' });
+    for (const env of withVault) passwords[env.name] = password;
+  } else if (isInteractive()) {
+    log.dim('Enter each environment\'s password (press Enter to skip one).');
+    for (const env of withVault) {
+      const { password } = await ask({ type: 'password', name: 'password', message: `Password for "${env.name}"` });
+      if (password) passwords[env.name] = password;
+    }
+  } else {
+    throw new VaultError('No password provided.', { hint: `Run interactively, set ${PASSWORD_ENV}, or pass --password.` });
+  }
+
+  const result = compareEnvironments(ctx, passwords, withVault.map((env) => env.name));
+  const skipped = result.environments.filter((env) => env.state !== 'compared');
+  for (const env of skipped) log.warn(`Skipped ${env.name}: ${SKIP_REASON[env.state] ?? env.state}`);
+  if (result.compared.length < 2) {
+    throw new VaultError('Could not open at least two environments, so there is nothing to compare.', { exitCode: 2 });
+  }
+
+  const counts = result.environments.filter((env) => env.state === 'compared').map((env) => `${env.name} (${env.count})`);
+  log.info(chalk.bold(`Compared variable names in ${counts.join(', ')}`));
+  if (!result.missing.length) {
+    log.success(`All ${result.shared} variable${result.shared === 1 ? '' : 's'} exist in every environment.`);
+    return;
+  }
+  const width = Math.min(40, Math.max(...result.missing.map((m) => m.key.length)));
+  log.info('');
+  for (const { key, missingFrom } of result.missing) {
+    log.info(`  ${chalk.yellow(sanitizeForTerminal(key).padEnd(width))}  missing in ${missingFrom.join(', ')}`);
+  }
+  log.info('');
+  const n = result.missing.length;
+  log.error(`${n} variable${n === 1 ? ' is' : 's are'} missing in some environments; ${result.shared} ${result.shared === 1 ? 'is' : 'are'} in all of them.`);
+  log.dim(`Add one with: dotcrypt set ${sanitizeForTerminal(result.missing[0].key)} -e ${result.missing[0].missingFrom[0]}`);
+  process.exitCode = 1;
+}
+
 async function readStdin() {
   const chunks = [];
   for await (const chunk of process.stdin) chunks.push(chunk);
@@ -777,6 +834,14 @@ program
     `\nExamples:\n  $ dotcrypt run -e production -- npm start\n  $ ${PASSWORD_ENV}=... dotcrypt run -e staging -- node server.js`,
   )
   .action(runCommand);
+
+program
+  .command('check')
+  .description('find variables that exist in one environment but are missing in another (names only)')
+  .option('-e, --env <names>', 'comma-separated environments to compare (default: all with an encrypted file)')
+  .option('-p, --password <password>', 'password to use for every environment')
+  .addHelpText('after', '\nExits with code 1 when variables are missing, so it can run in CI.')
+  .action(checkCommand);
 
 const hooks = program
   .command('hooks')

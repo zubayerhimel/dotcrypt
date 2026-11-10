@@ -105,6 +105,10 @@ test('initializes, encrypts and reports status without leaking secrets', async (
   res = await request('GET', '/api/status', { headers: auth() });
   assert.equal(res.json.environments[0].vault.valid, true);
   assert.ok(!JSON.stringify(res.json).includes('super-secret-value'));
+
+  res = await post('/api/compare', { passwords: { development: 'correct horse battery' } });
+  assert.deepEqual(res.json.environments, [{ name: 'development', state: 'compared', count: 1 }]);
+  assert.ok(!JSON.stringify(res.json).includes('super-secret-value'));
 });
 
 test('does not serve files outside the UI bundle', async () => {

@@ -13,6 +13,9 @@ All notable changes to this project are documented here. The format is based on
 - `set`, `get` and `unset` commands to change one variable without editing files by hand.
   `set` and `unset` update the vault and your local file and keep comments and formatting.
   `dotcrypt set KEY` asks for the value at a hidden prompt, or reads it from stdin.
+- `check` command and a **Missing variables** card in the dashboard: list variables that exist in one
+  environment but are missing in another. Only names are compared. `check` exits 1 when something is
+  missing, so it can run in CI.
 - `hooks install` / `hooks uninstall`: Git hooks that block commits with plaintext env files, remind
   you about unshared changes, and announce teammates' changes after `git pull` or a branch switch.
 
