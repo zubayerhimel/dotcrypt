@@ -12,6 +12,10 @@ import * as vault from './vault.js';
 export const UI_DIST_DIR = fileURLToPath(new URL('../ui/dist/', import.meta.url));
 const MAX_BODY_BYTES = 64 * 1024;
 
+export function isUiBuilt() {
+  return fs.existsSync(path.join(UI_DIST_DIR, 'index.html'));
+}
+
 const MIME_TYPES = {
   '.html': 'text/html; charset=utf-8',
   '.js': 'text/javascript; charset=utf-8',
@@ -145,14 +149,6 @@ export function openBrowser(url) {
  *  - Responses never contain secret values; passwords are never logged.
  */
 export function startUiServer({ cwd = process.cwd(), port = 0, onLog = () => {} } = {}) {
-  if (!fs.existsSync(path.join(UI_DIST_DIR, 'index.html'))) {
-    return Promise.reject(
-      new VaultError('The dashboard has not been built yet.', {
-        hint: 'Run "npm run build:ui" in the dotenv-vault-cli package directory.',
-      }),
-    );
-  }
-
   const projectDir = findProjectRoot(cwd) ?? path.resolve(cwd);
   const token = crypto.randomBytes(32).toString('hex');
   const tokenBytes = Buffer.from(token, 'utf8');

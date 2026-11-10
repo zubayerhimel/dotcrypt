@@ -75,6 +75,27 @@ export function loadEnvelope(ctx, env) {
   }
 }
 
+/**
+ * Classifies an environment's vault file without a password:
+ * "missing", "valid" (with its envelope), or "unreadable" (with the problem).
+ */
+export function inspectVault(ctx, env) {
+  if (!fileExists(env.encPath)) return { status: 'missing' };
+  try {
+    const envelope = loadEnvelope(ctx, env);
+    if (envelope.metadata.environment !== env.name) {
+      return {
+        status: 'unreadable',
+        problem: `${env.encryptedFile} belongs to environment "${envelope.metadata.environment}", not "${env.name}".`,
+      };
+    }
+    return { status: 'valid', envelope };
+  } catch (err) {
+    if (err instanceof VaultError && err.code === 'INVALID_VAULT') return { status: 'unreadable', problem: err.message };
+    throw err;
+  }
+}
+
 function decryptOrFail(envelope, password, env) {
   try {
     return decrypt(envelope, password, { expectedEnvironment: env.name });
@@ -160,20 +181,17 @@ export function encryptEnvironment(ctx, name, password, { overwrite = false, rep
   const plaintext = safeReadFile(ctx.root, env.plainPath);
 
   try {
-    let existing = null;
-    const vaultExisted = fileExists(env.encPath);
-    if (vaultExisted) {
-      try {
-        existing = loadEnvelope(ctx, env);
-      } catch (err) {
-        if (!replaceExisting) {
-          throw new ConfirmationRequiredError(err.message, {
-            reason: 'unreadable-vault',
-            hint: 'Replacing it creates a new vault file with this password.',
-          });
-        }
-        warnings.push(`Replaced unreadable ${env.encryptedFile}.`);
+    const vaultState = inspectVault(ctx, env);
+    const vaultExisted = vaultState.status !== 'missing';
+    const existing = vaultState.status === 'valid' ? vaultState.envelope : null;
+    if (vaultState.status === 'unreadable') {
+      if (!replaceExisting) {
+        throw new ConfirmationRequiredError(vaultState.problem, {
+          reason: 'unreadable-vault',
+          hint: 'Replacing it creates a new vault file with this password.',
+        });
       }
+      warnings.push(`Replaced unreadable ${env.encryptedFile}.`);
     }
 
     let previous = null;
@@ -295,31 +313,33 @@ export function verifyPassword(ctx, name, password) {
   decryptOrFail(loadEnvelope(ctx, env), password, env).fill(0);
 }
 
-/** Key-level comparison of vault vs local. Returns key names only. */
+/**
+ * Key-level comparison of vault vs local. Returns key names only.
+ * `identical` is true only when both files are byte-for-byte equal (comments and formatting included).
+ */
 export function diffEnvironment(ctx, name, password) {
   assertPasswordProvided(password);
   const env = resolveEnvironment(ctx, name);
   const envelope = loadEnvelope(ctx, env);
   const plaintext = decryptOrFail(envelope, password, env);
 
+  const localExists = fileExists(env.plainPath);
+  let local = null;
   let vaultVars;
+  let localVars = {};
+  let identical = false;
   try {
+    if (localExists) local = safeReadFile(ctx.root, env.plainPath);
     vaultVars = parseEnv(plaintext);
+    if (local) {
+      localVars = parseEnv(local);
+      identical = buffersEqual(local, plaintext);
+    }
   } finally {
     plaintext.fill(0);
+    local?.fill(0);
   }
-
-  let localVars = {};
-  const localExists = fileExists(env.plainPath);
-  if (localExists) {
-    const local = safeReadFile(ctx.root, env.plainPath);
-    try {
-      localVars = parseEnv(local);
-    } finally {
-      local.fill(0);
-    }
-  }
-  return { environment: env.name, localExists, diff: diffEnv(vaultVars, localVars) };
+  return { environment: env.name, localExists, identical, diff: diffEnv(vaultVars, localVars) };
 }
 
 /**

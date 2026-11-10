@@ -6,7 +6,7 @@ import path from 'node:path';
 
 import { loadConfig } from '../src/config.js';
 import { ConfirmationRequiredError } from '../src/utils.js';
-import { decryptEnvironment, encryptEnvironment, initVault, rotateEnvironmentKey } from '../src/vault.js';
+import { decryptEnvironment, diffEnvironment, encryptEnvironment, initVault, rotateEnvironmentKey } from '../src/vault.js';
 
 const PASSWORD = 'correct horse battery';
 
@@ -52,6 +52,31 @@ test('encrypt with a different password requires replaceExisting', () => {
   assert.equal(err.reason, 'password-mismatch');
   const result = encryptEnvironment(ctx, 'development', 'another long password', { replaceExisting: true });
   assert.equal(result.status, 'updated');
+});
+
+test('encrypt treats a vault file from another environment as unreadable', () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'dvc-vault-'));
+  initVault(root, { name: 'app', environments: ['development', 'staging'] });
+  fs.writeFileSync(path.join(root, '.env.development'), 'A=1\n');
+  fs.writeFileSync(path.join(root, '.env.staging'), 'A=2\n');
+  const ctx = loadConfig(root);
+  encryptEnvironment(ctx, 'development', PASSWORD);
+  fs.copyFileSync(path.join(root, '.env.development.enc'), path.join(root, '.env.staging.enc'));
+
+  const err = confirmationReason(() => encryptEnvironment(ctx, 'staging', PASSWORD));
+  assert.equal(err.reason, 'unreadable-vault');
+  assert.match(err.message, /belongs to environment "development"/);
+});
+
+test('diff reports key-level sync separately from byte-level identity', () => {
+  const { root, ctx } = setup();
+  encryptEnvironment(ctx, 'development', PASSWORD);
+  assert.equal(diffEnvironment(ctx, 'development', PASSWORD).identical, true);
+
+  fs.writeFileSync(path.join(root, '.env.development'), '# note\nA="1"\nB=2\n');
+  const { diff, identical } = diffEnvironment(ctx, 'development', PASSWORD);
+  assert.equal(identical, false);
+  assert.deepEqual(diff, { added: [], removed: [], changed: [], unchanged: 2 });
 });
 
 test('decrypt protects a differing local file and restores it on overwrite', () => {

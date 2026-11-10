@@ -54,7 +54,7 @@ Prefer the terminal? Everything in the dashboard is also available as a CLI comm
 | Command | Description |
 | --- | --- |
 | `init [-n name] [--envs a,b,c] [-d env] [-y] [-f]` | Create `.env-vault.json` and add ignore rules for plaintext env files to `.gitignore`. |
-| `encrypt [-e env] [-p password] [-f]` | Encrypt the mapped local file (e.g. `.env.staging`) into its `.enc` file. |
+| `encrypt [-e env] [-p password] [-f] [--replace]` | Encrypt the mapped local file (e.g. `.env.staging`) into its `.enc` file. |
 | `decrypt [-e env] [-p password] [-f]` | Decrypt the `.enc` file into the mapped local file. |
 | `rotate-key [-e env] [-o old] [-n new]` | Re-encrypt with a new password, a fresh salt and a fresh IV. |
 | `diff [-e env] [-p password] [--exit-code]` | Show **key names** that were added / removed / changed. Values are never printed. |
@@ -82,7 +82,9 @@ Passwords are resolved in this order:
   overwriting. If the files are identical, nothing is written (no Git churn).
 - `encrypt` **verifies your password against the existing `.enc` file**. This prevents a
   teammate from accidentally re-encrypting a shared vault with a different password. Change
-  passwords with `rotate-key`, or force a replacement with `--force`.
+  passwords with `rotate-key`. To deliberately discard a vault file that is unreadable, belongs to
+  another environment, or uses a different password, pass `--replace` (`--force` alone never does
+  this). When the password was typed at a prompt, you must re-enter it before the vault is replaced.
 - `init` refuses to overwrite an existing `.env-vault.json` without confirmation or `--force`.
 - Non-interactive sessions (CI, pipes) never prompt; they fail safely unless `--force` is given.
 

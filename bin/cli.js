@@ -2,23 +2,31 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { createRequire } from 'node:module';
-import { Command, InvalidArgumentError } from 'commander';
+import { Command, InvalidArgumentError, Option } from 'commander';
 import chalk from 'chalk';
 import prompts from 'prompts';
 
-import { CONFIG_FILENAME, DEFAULT_ENVIRONMENTS, listEnvironments, loadConfig, resolveEnvironment } from '../src/config.js';
+import {
+  CONFIG_FILENAME,
+  DEFAULT_ENVIRONMENTS,
+  ENV_NAME_PATTERN,
+  listEnvironments,
+  loadConfig,
+  resolveEnvironment,
+} from '../src/config.js';
 import { ConfirmationRequiredError, VaultError, fileExists, hasDifferences, sanitizeForTerminal } from '../src/utils.js';
 import {
   decryptEnvironment,
   diffEnvironment,
   encryptEnvironment,
   initVault,
+  inspectVault,
   loadEnvelope,
   newPasswordProblem,
   rotateEnvironmentKey,
   verifyPassword,
 } from '../src/vault.js';
-import { openBrowser, startUiServer } from '../src/server.js';
+import { isUiBuilt, openBrowser, startUiServer } from '../src/server.js';
 
 const require = createRequire(import.meta.url);
 const pkg = require('../package.json');
@@ -48,7 +56,7 @@ function ask(questions) {
 async function confirmOrAbort(message, { force = false } = {}) {
   if (force) return;
   if (!isInteractive()) {
-    throw new VaultError(`${message.replace(/\?$/, '.')} Not running interactively.`, {
+    throw new VaultError(`${message} Confirmation required, but not running interactively.`, {
       hint: 'Re-run with --force to proceed without a prompt.',
     });
   }
@@ -141,8 +149,12 @@ async function withOverwriteConfirmation(run, { force, diffLabels }) {
     return run(force);
   } catch (err) {
     if (!(err instanceof ConfirmationRequiredError) || err.reason !== 'overwrite') throw err;
-    log.info(`Changes: ${summarizeDiff(err.diff)}`);
-    printDiff(err.diff, diffLabels);
+    if (hasDifferences(err.diff)) {
+      log.info(`Changes: ${summarizeDiff(err.diff)}`);
+      printDiff(err.diff, diffLabels);
+    } else {
+      log.info('All keys and values match; only comments or formatting differ.');
+    }
     await confirmOrAbort(err.message);
     return run(true);
   }
@@ -190,6 +202,18 @@ async function initCommand(opts) {
     }
   }
 
+  environments = environments.map((env) => env.trim()).filter(Boolean);
+  if (environments.length === 0) throw new VaultError('At least one environment is required.');
+  const invalid = environments.filter((env) => !ENV_NAME_PATTERN.test(env));
+  if (invalid.length) {
+    throw new VaultError(`Invalid environment name(s): ${invalid.map((env) => `"${env}"`).join(', ')}.`, {
+      hint: 'Use 1-64 letters, digits, "-" or "_", starting and ending with a letter or digit.',
+    });
+  }
+  if (defaultEnvironment !== undefined && !environments.includes(defaultEnvironment)) {
+    throw new VaultError(`Default environment "${defaultEnvironment}" is not one of: ${environments.join(', ')}.`);
+  }
+
   const { config, gitignoreAdded, warnings } = initVault(root, { name, environments, defaultEnvironment, overwrite });
   log.success(`Wrote ${CONFIG_FILENAME}`);
   if (gitignoreAdded.length) log.success(`Updated .gitignore with: ${gitignoreAdded.join(', ')}`);
@@ -218,15 +242,14 @@ async function encryptCommand(opts) {
   }
 
   // Inspect the existing vault file before prompting so we know whether this is a new password.
-  let hasValidVault = false;
-  if (fileExists(env.encPath)) {
-    try {
-      loadEnvelope(ctx, env);
-      hasValidVault = true;
-    } catch (err) {
-      if (!opts.force) throw new VaultError(err.message, { hint: 'Use --force to replace it.' });
-    }
+  const vaultState = inspectVault(ctx, env);
+  if (vaultState.status === 'unreadable' && !opts.replace) {
+    throw new VaultError(vaultState.problem, {
+      hint: 'Fix the file (e.g. resolve a Git merge conflict), or use --replace to discard it and create a new one.',
+    });
   }
+  const hasValidVault = vaultState.status === 'valid';
+  const passwordPrompted = opts.password === undefined && !process.env[PASSWORD_ENV];
 
   const password = await resolvePassword({
     flagValue: opts.password,
@@ -236,20 +259,36 @@ async function encryptCommand(opts) {
     message: hasValidVault ? `Vault password for "${env.name}"` : `Choose a new vault password for "${env.name}"`,
   });
 
-  let result;
-  try {
-    result = await withOverwriteConfirmation(
-      (overwrite) => encryptEnvironment(ctx, env.name, password, { overwrite, replaceExisting: Boolean(opts.force) }),
+  const run = (replaceExisting) =>
+    withOverwriteConfirmation(
+      (overwrite) => encryptEnvironment(ctx, env.name, password, { overwrite, replaceExisting }),
       { force: Boolean(opts.force), diffLabels: { addedLabel: 'new in local', removedLabel: 'will be removed from vault' } },
     );
+
+  let result;
+  try {
+    result = await run(vaultState.status === 'unreadable');
   } catch (err) {
-    if (err instanceof ConfirmationRequiredError && err.reason === 'password-mismatch') {
+    if (!(err instanceof ConfirmationRequiredError) || err.reason !== 'password-mismatch') throw err;
+    if (!opts.replace) {
       throw new VaultError(err.message, {
         exitCode: 2,
-        hint: 'To change the password use "dotenv-vault-cli rotate-key". Use --force to replace the file anyway.',
+        hint:
+          'Check the password. To change it use "dotenv-vault-cli rotate-key"; ' +
+          'to discard the existing vault file and start over use --replace.',
       });
     }
-    throw err;
+    // Replacing makes this the vault's new password, so treat it like one: a typo here would lock everyone out.
+    assertNewPassword(password);
+    await confirmOrAbort(
+      `${env.encryptedFile} is protected by a different password. Discard it and re-encrypt ${env.file} with the password you entered?`,
+      { force: opts.force },
+    );
+    if (passwordPrompted) {
+      const { confirmation } = await ask({ type: 'password', name: 'confirmation', message: 'Re-enter the new password' });
+      if (confirmation !== password) throw new VaultError('Passwords do not match. No files were changed.');
+    }
+    result = await run(true);
   }
 
   printWarnings(result.warnings);
@@ -322,12 +361,13 @@ async function diffCommand(opts) {
     message: `Vault password for "${env.name}"`,
   });
 
-  const { diff, localExists } = diffEnvironment(ctx, env.name, password);
+  const { diff, localExists, identical } = diffEnvironment(ctx, env.name, password);
   log.info(chalk.bold(`Comparing ${env.file} (local) with ${env.encryptedFile} (vault)`));
   if (!localExists) log.warn(`${env.file} does not exist locally; treating it as empty.`);
 
   if (!hasDifferences(diff)) {
     log.success(`In sync (${diff.unchanged} key${diff.unchanged === 1 ? '' : 's'}).`);
+    if (localExists && !identical) log.dim('  Comments or formatting differ; encrypt/decrypt would still rewrite the file.');
     return;
   }
   printDiff(diff, { addedLabel: 'local only — not yet encrypted', removedLabel: 'vault only — missing locally' });
@@ -337,6 +377,11 @@ async function diffCommand(opts) {
 }
 
 async function uiCommand(opts) {
+  if (!isUiBuilt()) {
+    throw new VaultError('The dashboard has not been built yet.', {
+      hint: 'Run "npm run build:ui" in the dotenv-vault-cli package directory.',
+    });
+  }
   const timestamp = () => new Date().toLocaleTimeString();
   const ui = await startUiServer({
     port: opts.port,
@@ -394,7 +439,8 @@ program
   .description('encrypt a local env file into its .enc vault file')
   .option('-e, --env <name>', 'environment name')
   .option('-p, --password <password>', 'vault password (prompted if omitted)')
-  .option('-f, --force', 'overwrite without prompting, even if the password differs from the existing file')
+  .option('-f, --force', 'overwrite the vault file without prompting')
+  .option('--replace', 'discard an existing vault file that is unreadable or protected by a different password')
   .action(encryptCommand);
 
 program
@@ -424,7 +470,7 @@ program
 program
   .command('ui')
   .description('open a local web dashboard (bound to 127.0.0.1, token-protected)')
-  .option('--port <port>', 'port to listen on (default: a random free port)', parsePort, 0)
+  .addOption(new Option('--port <port>', 'port to listen on').argParser(parsePort).default(0, 'a random free port'))
   .option('--no-open', 'do not open the browser automatically')
   .action(uiCommand);
 
