@@ -19,6 +19,7 @@ import {
   decryptEnvironment,
   diffEnvironment,
   encryptEnvironment,
+  getVaultStatus,
   initVault,
   inspectVault,
   loadEnvelope,
@@ -297,7 +298,68 @@ async function encryptCommand(opts) {
     return;
   }
   log.success(`Encrypted ${env.file} -> ${env.encryptedFile}`);
-  log.dim(`Commit ${env.encryptedFile} to share it with your team.`);
+  log.dim(`Share it with your team: ${shareCommand(env)}`);
+}
+
+function shareCommand(env) {
+  return `git add ${env.encryptedFile} && git commit -m "Update ${env.name} secrets" && git push`;
+}
+
+const SYNC_TEXT = {
+  synced: [chalk.green('✔'), 'Up to date'],
+  'local-changes': [chalk.yellow('↑'), 'You have changes your team does not have'],
+  'incoming-changes': [chalk.cyan('↓'), 'New changes from your team'],
+  conflict: [chalk.red('!'), 'Changed both locally and by your team'],
+  unknown: [chalk.dim('?'), 'Not checked yet on this machine'],
+  'not-shared': [chalk.yellow('↑'), 'Not shared yet'],
+  'not-downloaded': [chalk.cyan('↓'), 'Shared by your team, not on this machine yet'],
+  empty: [chalk.dim('·'), 'No env file yet'],
+  broken: [chalk.red('✖'), 'Encrypted file is unreadable'],
+};
+
+function nextStep(env) {
+  const flag = `-e ${env.name}`;
+  switch (env.sync) {
+    case 'local-changes':
+    case 'not-shared':
+      return `dotcrypt encrypt ${flag}`;
+    case 'incoming-changes':
+    case 'not-downloaded':
+      return `dotcrypt decrypt ${flag}`;
+    case 'conflict':
+      return `dotcrypt diff ${flag}, then keep yours (encrypt) or take theirs (decrypt)`;
+    case 'unknown':
+      return `dotcrypt diff ${flag}`;
+    case 'empty':
+      return `create ${env.file}, then dotcrypt encrypt ${flag}`;
+    case 'broken':
+      return env.vault.error ?? `${env.encryptedFile} belongs to "${env.vault.environment}"`;
+    default:
+      return null;
+  }
+}
+
+function statusCommand() {
+  const status = getVaultStatus(loadConfig());
+  log.info(chalk.bold(status.vault.name) + chalk.dim(`  ${status.root}`));
+  log.info('');
+  const width = Math.max(...status.environments.map((env) => env.name.length + (env.isDefault ? 10 : 0)));
+  for (const env of status.environments) {
+    const share = env.vaultGit;
+    const unsent = env.vault.exists && share.inRepo && (share.uncommitted || share.unpushed);
+    const [icon, text] =
+      env.sync === 'synced' && unsent ? [chalk.yellow('↑'), 'Encrypted, but not pushed to your team yet'] : SYNC_TEXT[env.sync];
+    const label = env.isDefault ? `${env.name} ${chalk.dim('(default)')}` : env.name;
+    const pad = ' '.repeat(width - env.name.length - (env.isDefault ? 10 : 0));
+    log.info(`  ${icon} ${label}${pad}  ${text}`);
+    const step = nextStep(env);
+    if (step) log.dim(`      → ${step}`);
+    if (env.git.tracked) log.warn(`    ${env.file} is TRACKED by Git! Run "git rm --cached ${env.file}" and rotate its secrets.`);
+    if (unsent) {
+      log.dim(`      → ${env.encryptedFile} is not pushed yet: ${share.uncommitted ? shareCommand(env) : 'git push'}`);
+    }
+    if (share.behind) log.dim(`      → a teammate pushed a newer ${env.encryptedFile}: git pull`);
+  }
 }
 
 async function decryptCommand(opts) {
@@ -423,6 +485,11 @@ program
     'after',
     `\nPasswords are read from (in order): the CLI flag, $${PASSWORD_ENV} ($${NEW_PASSWORD_ENV} for rotate-key's new password), or an interactive prompt.`,
   );
+
+program
+  .command('status')
+  .description('show what changed and what to do next for each environment (no password needed)')
+  .action(statusCommand);
 
 program
   .command('init')

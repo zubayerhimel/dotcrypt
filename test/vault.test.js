@@ -3,10 +3,18 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
+import { execFileSync } from 'node:child_process';
 
 import { loadConfig } from '../src/config.js';
 import { ConfirmationRequiredError } from '../src/utils.js';
-import { decryptEnvironment, diffEnvironment, encryptEnvironment, initVault, rotateEnvironmentKey } from '../src/vault.js';
+import {
+  decryptEnvironment,
+  diffEnvironment,
+  encryptEnvironment,
+  getEnvironmentStatus,
+  initVault,
+  rotateEnvironmentKey,
+} from '../src/vault.js';
 
 const PASSWORD = 'correct horse battery';
 
@@ -101,4 +109,53 @@ test('wrong passwords fail with DECRYPT_FAILED and rotation invalidates the old 
   rotateEnvironmentKey(ctx, 'development', PASSWORD, 'brand new password');
   assert.throws(() => decryptEnvironment(ctx, 'development', PASSWORD, { overwrite: true }), { code: 'DECRYPT_FAILED' });
   assert.equal(decryptEnvironment(ctx, 'development', 'brand new password').status, 'unchanged');
+});
+
+function gitSetup() {
+  const { root, ctx } = setup();
+  execFileSync('git', ['init', '-q'], { cwd: root });
+  return { root, ctx };
+}
+
+const syncOf = (ctx) => getEnvironmentStatus(ctx, 'development').sync;
+
+test('tracks who changed what since the last sync, per clone', () => {
+  const me = gitSetup();
+  assert.equal(syncOf(me.ctx), 'not-shared');
+  encryptEnvironment(me.ctx, 'development', PASSWORD);
+  assert.equal(syncOf(me.ctx), 'synced');
+
+  // A teammate's clone receives the vault file and decrypts it.
+  const mate = gitSetup();
+  fs.rmSync(path.join(mate.root, '.env.development'));
+  fs.copyFileSync(path.join(me.root, '.env.development.enc'), path.join(mate.root, '.env.development.enc'));
+  assert.equal(syncOf(mate.ctx), 'not-downloaded');
+  decryptEnvironment(mate.ctx, 'development', PASSWORD);
+  assert.equal(syncOf(mate.ctx), 'synced');
+
+  // The teammate adds a variable and shares it.
+  fs.appendFileSync(path.join(mate.root, '.env.development'), 'C=3\n');
+  assert.equal(syncOf(mate.ctx), 'local-changes');
+  encryptEnvironment(mate.ctx, 'development', PASSWORD, { overwrite: true });
+  assert.equal(syncOf(mate.ctx), 'synced');
+
+  // I pull their vault file: incoming changes; if I also edited locally: conflict.
+  fs.copyFileSync(path.join(mate.root, '.env.development.enc'), path.join(me.root, '.env.development.enc'));
+  assert.equal(syncOf(me.ctx), 'incoming-changes');
+  fs.appendFileSync(path.join(me.root, '.env.development'), 'D=4\n');
+  assert.equal(syncOf(me.ctx), 'conflict');
+  decryptEnvironment(me.ctx, 'development', PASSWORD, { overwrite: true });
+  assert.equal(syncOf(me.ctx), 'synced');
+
+  rotateEnvironmentKey(me.ctx, 'development', PASSWORD, 'brand new password');
+  assert.equal(syncOf(me.ctx), 'synced');
+});
+
+test('sync state is unknown until a matching diff confirms it', () => {
+  const { root, ctx } = gitSetup();
+  encryptEnvironment(ctx, 'development', PASSWORD);
+  fs.rmSync(path.join(root, '.git', 'dotcrypt'), { recursive: true });
+  assert.equal(syncOf(ctx), 'unknown');
+  diffEnvironment(ctx, 'development', PASSWORD);
+  assert.equal(syncOf(ctx), 'synced');
 });

@@ -18,11 +18,13 @@ import {
   diffEnv,
   ensureGitignore,
   fileExists,
+  gitShareStatus,
   gitStatusOf,
   parseEnv,
   safeReadFile,
   safeWriteFile,
 } from './utils.js';
+import { computeSync, fingerprint, fingerprintFile, openSyncState } from './sync.js';
 
 export const MIN_PASSWORD_LENGTH = 12;
 
@@ -116,7 +118,7 @@ function fileInfo(root, absPath) {
 }
 
 /** Describes an environment without decrypting anything. Never exposes secret values. */
-export function getEnvironmentStatus(ctx, name) {
+export function getEnvironmentStatus(ctx, name, syncState = openSyncState(ctx.root)) {
   const env = resolveEnvironment(ctx, name);
   const local = fileInfo(ctx.root, env.plainPath);
   const vault = { ...fileInfo(ctx.root, env.encPath), valid: false };
@@ -136,25 +138,35 @@ export function getEnvironmentStatus(ctx, name) {
 
   const git = gitStatusOf(ctx.root, env.file);
   const vaultGit = gitStatusOf(ctx.root, env.encryptedFile);
-  const localNewerThanVault = Boolean(
-    local.modifiedAt && vault.encryptedAt && Date.parse(local.modifiedAt) > Date.parse(vault.encryptedAt),
-  );
+  const broken = vault.exists && !(vault.valid && vault.environmentMatches);
+  const sync = broken
+    ? 'broken'
+    : computeSync({
+        localExists: local.exists,
+        vaultExists: vault.exists,
+        localHash: local.exists && vault.exists ? fingerprintFile(env.plainPath) : null,
+        vaultHash: local.exists && vault.exists ? fingerprintFile(env.encPath) : null,
+        baseline: syncState.get(env.name),
+      });
 
   return {
     name: env.name,
     file: env.file,
     encryptedFile: env.encryptedFile,
     isDefault: ctx.config.defaultEnvironment === env.name,
+    sync,
     local,
     vault,
     git,
-    vaultGit: vaultGit.inRepo ? { inRepo: true, tracked: vaultGit.tracked } : { inRepo: false },
-    localNewerThanVault,
+    vaultGit: vaultGit.inRepo
+      ? { inRepo: true, tracked: vaultGit.tracked, ...gitShareStatus(ctx.root, env.encryptedFile) }
+      : { inRepo: false },
   };
 }
 
 export function getVaultStatus(ctx) {
-  const environments = listEnvironments(ctx.config).map((name) => getEnvironmentStatus(ctx, name));
+  const syncState = openSyncState(ctx.root);
+  const environments = listEnvironments(ctx.config).map((name) => getEnvironmentStatus(ctx, name, syncState));
   return {
     root: ctx.root,
     configFile: CONFIG_FILENAME,
@@ -162,6 +174,11 @@ export function getVaultStatus(ctx) {
     defaultEnvironment: ctx.config.defaultEnvironment,
     environments,
   };
+}
+
+/** Records that the local file and the vault file currently hold the same content. */
+function markSynced(ctx, env, plaintext) {
+  openSyncState(ctx.root).set(env.name, { local: fingerprint(plaintext), vault: fingerprintFile(env.encPath) });
 }
 
 /**
@@ -218,7 +235,10 @@ export function encryptEnvironment(ctx, name, password, { overwrite = false, rep
     let diff;
     if (previous) {
       try {
-        if (buffersEqual(previous, plaintext)) return { status: 'unchanged', environment: env.name, warnings };
+        if (buffersEqual(previous, plaintext)) {
+          markSynced(ctx, env, plaintext);
+          return { status: 'unchanged', environment: env.name, warnings };
+        }
         diff = diffEnv(parseEnv(previous), parseEnv(plaintext));
       } finally {
         previous.fill(0);
@@ -233,6 +253,7 @@ export function encryptEnvironment(ctx, name, password, { overwrite = false, rep
 
     const envelope = encrypt(plaintext, password, { environment: env.name, sourceFile: env.file });
     safeWriteFile(ctx.root, env.encPath, serializeEnvelope(envelope), { mode: 0o644 });
+    markSynced(ctx, env, plaintext);
     return { status: vaultExisted ? 'updated' : 'created', environment: env.name, diff, warnings };
   } finally {
     plaintext.fill(0);
@@ -255,6 +276,7 @@ export function decryptEnvironment(ctx, name, password, { overwrite = false } = 
       const current = safeReadFile(ctx.root, env.plainPath);
       try {
         if (buffersEqual(current, plaintext)) {
+          markSynced(ctx, env, plaintext);
           return { status: 'unchanged', environment: env.name, warnings: plaintextWarnings(ctx.root, env.file) };
         }
         if (!overwrite) {
@@ -269,6 +291,7 @@ export function decryptEnvironment(ctx, name, password, { overwrite = false } = 
     }
 
     safeWriteFile(ctx.root, env.plainPath, plaintext, { mode: 0o600 });
+    markSynced(ctx, env, plaintext);
     return {
       status: localExisted ? 'updated' : 'created',
       environment: env.name,
@@ -299,7 +322,11 @@ export function rotateEnvironmentKey(ctx, name, oldPassword, newPassword) {
     check.fill(0);
     if (!ok) throw new VaultError('Verification of the re-encrypted data failed. The original file was not modified.');
 
+    const syncState = openSyncState(ctx.root);
+    const baseline = syncState.get(env.name);
+    const wasSynced = baseline?.vault === fingerprintFile(env.encPath);
     safeWriteFile(ctx.root, env.encPath, serializeEnvelope(rotated), { mode: 0o644 });
+    if (wasSynced) syncState.set(env.name, { local: baseline.local, vault: fingerprintFile(env.encPath) });
     return { status: 'rotated', environment: env.name };
   } finally {
     plaintext.fill(0);
@@ -334,6 +361,7 @@ export function diffEnvironment(ctx, name, password) {
     if (local) {
       localVars = parseEnv(local);
       identical = buffersEqual(local, plaintext);
+      if (identical) markSynced(ctx, env, plaintext);
     }
   } finally {
     plaintext.fill(0);

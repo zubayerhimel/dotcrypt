@@ -52,10 +52,19 @@ function useSubmit<T>(onSubmit: Submit<T>) {
 
 export type PasswordMode = "encrypt" | "decrypt" | "diff"
 
-const passwordCopy: Record<PasswordMode, { title: string; action: string }> = {
-  encrypt: { title: "Encrypt", action: "Encrypt" },
-  decrypt: { title: "Decrypt", action: "Decrypt" },
-  diff: { title: "Compare", action: "Compare" },
+function passwordCopy(env: EnvStatus, mode: PasswordMode, isNew: boolean) {
+  if (isNew) {
+    return {
+      title: `Create a password for ${env.name}`,
+      description:
+        "Teammates need this password to get these secrets. Share it once, privately (for example in a password manager) — never in Git or chat.",
+      action: "Share",
+    }
+  }
+  const known = `Enter the ${env.name} password your team uses.`
+  if (mode === "encrypt") return { title: `Share ${env.name}`, description: known, action: "Share" }
+  if (mode === "decrypt") return { title: `Get ${env.name} secrets`, description: known, action: "Get secrets" }
+  return { title: `Check ${env.name}`, description: `${known} Your file is compared with the shared version.`, action: "Check" }
 }
 
 export function PasswordDialog({
@@ -83,7 +92,7 @@ function PasswordForm({ env, mode, isNew, onSubmit }: { env: EnvStatus; mode: Pa
   const [password, setPassword] = useState("")
   const [confirmation, setConfirmation] = useState("")
   const { pending, error, setError, run } = useSubmit(onSubmit)
-  const copy = passwordCopy[mode]
+  const copy = passwordCopy(env, mode, isNew)
 
   const submit = (event: React.FormEvent) => {
     event.preventDefault()
@@ -100,14 +109,8 @@ function PasswordForm({ env, mode, isNew, onSubmit }: { env: EnvStatus; mode: Pa
   return (
     <form onSubmit={submit} className="grid gap-4">
       <DialogHeader>
-        <DialogTitle>
-          {copy.title} <span className="font-mono">{env.name}</span>
-        </DialogTitle>
-        <DialogDescription>
-          {isNew
-            ? `Choose the password that protects ${env.encryptedFile}. Share it with teammates over a secure channel, never via Git.`
-            : `Enter the vault password for ${env.encryptedFile}.`}
-        </DialogDescription>
+        <DialogTitle>{copy.title}</DialogTitle>
+        <DialogDescription>{copy.description}</DialogDescription>
       </DialogHeader>
       <FieldGroup>
         <Field data-invalid={Boolean(error) || undefined}>
@@ -138,7 +141,7 @@ function PasswordForm({ env, mode, isNew, onSubmit }: { env: EnvStatus; mode: Pa
         {error && <FieldError>{error}</FieldError>}
       </FieldGroup>
       <p className="text-xs text-muted-foreground">
-        The password stays in this tab's memory until you press Lock or close the tab. It is never written to disk.
+        dotcrypt remembers it in this tab until you press Lock or close the tab. It is never saved to disk.
       </p>
       <DialogFooter>
         <Button type="submit" disabled={pending}>
@@ -155,9 +158,40 @@ function PasswordForm({ env, mode, isNew, onSubmit }: { env: EnvStatus; mode: Pa
 // ---------------------------------------------------------------------------
 
 export type PendingConfirmation = {
-  env: string
+  env: EnvStatus
   action: "encrypt" | "decrypt"
   error: ApiError
+}
+
+function confirmCopy({ env, action, error }: PendingConfirmation) {
+  switch (error.reason) {
+    case "overwrite":
+      return action === "encrypt"
+        ? {
+            title: `Share these ${env.name} changes?`,
+            description: `Teammates get them after you commit and push ${env.encryptedFile}.`,
+            confirm: "Share",
+          }
+        : {
+            title: `Update your ${env.file}?`,
+            description: "Your file is replaced with the version your team shared.",
+            confirm: "Update my file",
+          }
+    case "password-mismatch":
+      return {
+        title: "That password doesn't match",
+        description: `It doesn't open the shared ${env.encryptedFile}. Ask your team for the right ${env.name} password and try again.`,
+        hint: "Only replace the shared file if you want to start over with a new password. Everyone will need the new password.",
+        confirm: "Replace shared file",
+      }
+    default:
+      return {
+        title: "Shared file can't be read",
+        description: error.message,
+        hint: "This is usually an unresolved Git merge conflict. Replacing it re-creates the shared file from your local file.",
+        confirm: "Replace shared file",
+      }
+  }
 }
 
 export function ConfirmDialog({
@@ -172,6 +206,7 @@ export function ConfirmDialog({
   const [busy, setBusy] = useState(false)
   const error = pending?.error
   const destructive = error?.reason !== "overwrite"
+  const copy = pending ? confirmCopy(pending) : null
 
   const confirm = async () => {
     setBusy(true)
@@ -188,9 +223,9 @@ export function ConfirmDialog({
         <AlertDialogHeader>
           <AlertDialogTitle className="flex items-center gap-2">
             {destructive && <TriangleAlertIcon className="size-4 text-destructive" />}
-            {error?.reason === "overwrite" ? "Confirm overwrite" : "Replace vault file?"}
+            {copy?.title}
           </AlertDialogTitle>
-          <AlertDialogDescription>{error?.message}</AlertDialogDescription>
+          <AlertDialogDescription>{copy?.description}</AlertDialogDescription>
         </AlertDialogHeader>
         {error?.diff && pending && (
           <div className="grid gap-2">
@@ -198,12 +233,12 @@ export function ConfirmDialog({
             <DiffList diff={error.diff} labels={DIFF_LABELS[pending.action]} />
           </div>
         )}
-        {error?.hint && <p className="text-xs text-muted-foreground">{error.hint}</p>}
+        {copy?.hint && <p className="text-xs text-muted-foreground">{copy.hint}</p>}
         <AlertDialogFooter>
           <AlertDialogCancel disabled={busy}>Cancel</AlertDialogCancel>
           <AlertDialogAction variant={destructive ? "destructive" : "default"} disabled={busy} onClick={confirm}>
             {busy && <Spinner data-icon="inline-start" />}
-            {error?.reason === "overwrite" ? "Overwrite" : "Replace"}
+            {copy?.confirm}
           </AlertDialogAction>
         </AlertDialogFooter>
       </AlertDialogContent>
@@ -215,41 +250,75 @@ export function ConfirmDialog({
 // Diff results
 // ---------------------------------------------------------------------------
 
-export function DiffDialog({
+export type Choice = "encrypt" | "decrypt"
+
+export function CompareDialog({
   result,
   env,
   onOpenChange,
+  onChoose,
 }: {
   result: DiffResult | null
   env: EnvStatus | undefined
   onOpenChange: (open: boolean) => void
+  onChoose: (choice: Choice) => Promise<void>
 }) {
+  const [pending, setPending] = useState<Choice | null>(null)
+  const differs = result !== null && !result.identical
+  const choose = async (choice: Choice) => {
+    setPending(choice)
+    try {
+      await onChoose(choice)
+    } finally {
+      setPending(null)
+    }
+  }
+
   return (
-    <Dialog open={result !== null} onOpenChange={onOpenChange}>
+    <Dialog open={result !== null} onOpenChange={(open) => !pending && onOpenChange(open)}>
       <DialogContent className="sm:max-w-lg">
         <DialogHeader>
           <DialogTitle>
-            Diff <span className="font-mono">{result?.environment}</span>
+            {differs ? "Your file and your team's version differ" : `${result?.environment} is up to date`}
           </DialogTitle>
           <DialogDescription>
-            Comparing <code className="font-mono">{env?.file}</code> (local) with{" "}
-            <code className="font-mono">{env?.encryptedFile}</code> (vault). Only key names are shown.
+            {differs
+              ? `Choose which version of ${env?.name} to keep. Only variable names are shown, never values.`
+              : `${env?.file} matches the version your team shares.`}
           </DialogDescription>
         </DialogHeader>
-        {result && (
+        {result && differs && (
           <div className="grid gap-2">
             {!result.localExists && (
-              <p className="text-sm text-amber-700 dark:text-amber-400">The local file does not exist; treated as empty.</p>
+              <p className="text-sm text-amber-700 dark:text-amber-400">You don't have {env?.file} yet.</p>
             )}
-            <p className="text-sm font-medium">
-              {hasDifferences(result.diff)
-                ? diffSummary(result.diff)
-                : `In sync (${result.diff.unchanged} key${result.diff.unchanged === 1 ? "" : "s"})`}
+            {hasDifferences(result.diff) ? (
+              <>
+                <p className="text-sm font-medium">{diffSummary(result.diff)}</p>
+                <DiffList diff={result.diff} labels={DIFF_LABELS.diff} />
+              </>
+            ) : (
+              <p className="text-sm text-muted-foreground">Same variables and values — only comments or formatting differ.</p>
+            )}
+            <p className="text-xs text-muted-foreground">
+              Need parts of both? Copy the missing variables into your {env?.file} first, then choose "Keep mine".
             </p>
-            {hasDifferences(result.diff) && <DiffList diff={result.diff} labels={DIFF_LABELS.diff} />}
           </div>
         )}
-        <DialogFooter showCloseButton />
+        <DialogFooter showCloseButton={!differs}>
+          {differs && (
+            <>
+              <Button variant="outline" disabled={pending !== null} onClick={() => void choose("decrypt")}>
+                {pending === "decrypt" && <Spinner data-icon="inline-start" />}
+                Use team's version
+              </Button>
+              <Button disabled={pending !== null || !result?.localExists} onClick={() => void choose("encrypt")}>
+                {pending === "encrypt" && <Spinner data-icon="inline-start" />}
+                Keep mine and share it
+              </Button>
+            </>
+          )}
+        </DialogFooter>
       </DialogContent>
     </Dialog>
   )
@@ -307,10 +376,11 @@ function RotateForm({
     <form onSubmit={submit} className="grid gap-4">
       <DialogHeader>
         <DialogTitle>
-          Rotate key for <span className="font-mono">{env.name}</span>
+          Change password for <span className="font-mono">{env.name}</span>
         </DialogTitle>
         <DialogDescription>
-          Re-encrypts {env.encryptedFile} with a new password, fresh salt and IV. Teammates will need the new password.
+          Re-encrypts {env.encryptedFile} with a new password. After you push it, teammates need the new password. If
+          someone left the team, also change the secrets themselves — old versions stay in Git history.
         </DialogDescription>
       </DialogHeader>
       <FieldGroup>
@@ -352,7 +422,7 @@ function RotateForm({
       <DialogFooter>
         <Button type="submit" disabled={pending}>
           {pending && <Spinner data-icon="inline-start" />}
-          Rotate key
+          Change password
         </Button>
       </DialogFooter>
     </form>

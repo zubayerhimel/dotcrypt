@@ -6,6 +6,24 @@ All notable changes to this project are documented here. The format is based on
 
 ## [Unreleased]
 
+### Added
+
+- `status` command: shows, per environment, whether you or your team changed something since your
+  last sync and what to do next. No password needed.
+- Sync tracking: fingerprints recorded in `.git/dotcrypt/sync-state.json` (per clone, never
+  committed) so dotcrypt can tell local changes from incoming ones.
+- `encrypt` now prints the Git command to send the `.enc` file to your team.
+
+### Changed
+
+- Simpler dashboard: plain-language states ("You have unshared changes", "New changes from your
+  team", ...), one main button per environment, a copyable commit/push command, a "How sharing
+  works" guide, and a Compare dialog to choose between your version and your team's.
+
+### Fixed
+
+- The dashboard no longer reports "Local changed" right after decrypting.
+
 ## [1.0.0] - 2026-11-10
 
 ### Added

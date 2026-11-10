@@ -60,6 +60,7 @@ Prefer the terminal? Everything in the dashboard is also available as a CLI comm
 
 | Command | Description |
 | --- | --- |
+| `status` | Show what changed for each environment and what to do next. No password needed. |
 | `init [-n name] [--envs a,b,c] [-d env] [-y] [-f]` | Create `.dotcrypt.json` and add ignore rules for plaintext env files to `.gitignore`. |
 | `encrypt [-e env] [-p password] [-f] [--replace]` | Encrypt the mapped local file (e.g. `.env.staging`) into its `.enc` file. |
 | `decrypt [-e env] [-p password] [-f]` | Decrypt the `.enc` file into the mapped local file. |
@@ -136,35 +137,62 @@ Custom plaintext paths that the default `.env` / `.env.*` rules don't cover are 
 
 ## Team workflow
 
-**Project owner (once):**
+The idea in one sentence: **your secrets live in normal `.env` files; you share them by
+encrypting them into `.enc` files and pushing those through Git.**
 
-```bash
-dotcrypt init                     # creates .dotcrypt.json, updates .gitignore
-# create .env.development, .env.staging, ...
-dotcrypt encrypt -e development   # choose a strong password
-dotcrypt encrypt -e production    # use a *different* password per environment
-git add .dotcrypt.json .gitignore *.enc
-git commit -m "Add encrypted environments"
-```
+The easiest way to work is the dashboard (`dotcrypt ui`). Each environment card says in plain
+words what state it is in and shows one button for the next step. `dotcrypt status` shows the
+same thing in the terminal.
 
-Share each environment's password **out of band** (password manager, not chat or the repo).
+**Setting up (once, by one person):**
 
-**Teammate on a new machine:**
+1. Run `dotcrypt init` (or open `dotcrypt ui` and click through the setup).
+2. Create your `.env` files as usual and click **Share with team** on each card (or run
+   `dotcrypt encrypt -e <env>`). You choose a password per environment.
+3. Commit and push `.dotcrypt.json`, `.gitignore` and the `.enc` files. The card shows the exact
+   command.
+4. Give teammates the passwords privately (a password manager, not chat or the repo).
 
-```bash
-git pull
-dotcrypt decrypt -e development
-```
+**You added or changed a variable:**
 
-**Changing a secret:**
+1. Edit the `.env` file in your editor.
+2. The card now says **You have unshared changes**. Click **Share changes**
+   (CLI: `dotcrypt encrypt -e <env>`).
+3. Commit and push the `.enc` file. The card shows the command, for example:
+   `git add .env.development.enc && git commit -m "Update development secrets" && git push`.
 
-```bash
-git pull                                  # always start from the latest vault
-dotcrypt diff -e development       # see what differs before acting
-# edit .env.development
-dotcrypt encrypt -e development
-git add .env.development.enc && git commit -m "Update dev env" && git push
-```
+**A teammate changed something:**
+
+1. `git pull`.
+2. The card says **New changes from your team**. Click **Get latest**
+   (CLI: `dotcrypt decrypt -e <env>`).
+
+**A new teammate joins:** they clone the repo, run `npx dotcrypt ui`, click **Get secrets** on
+each card, and enter the password you gave them.
+
+**Both of you changed the same environment:** the card says **Changed on both sides**. Click
+**Review** to see which variable names differ, then choose **Keep mine and share it** or **Use
+team's version**. If you need parts of both, copy the missing variables into your file first,
+then keep yours.
+
+### How dotcrypt knows what changed
+
+`.enc` files are re-encrypted with a fresh random IV every time, so comparing timestamps or file
+contents can't tell who changed what. Instead, every time you share, get, or compare an
+environment, dotcrypt records fingerprints (SHA-256) of both files at that moment in
+`.git/dotcrypt/sync-state.json`. That file is local to your clone and never committed. Later it
+compares the current files with those fingerprints:
+
+| State | Meaning | Next step |
+| --- | --- | --- |
+| Up to date | Neither file changed since your last sync. | Nothing. |
+| You have unshared changes | Your `.env` changed. | Share, then commit and push. |
+| New changes from your team | The `.enc` changed (e.g. after `git pull`). | Get latest. |
+| Changed on both sides | Both changed. | Review and choose a version. |
+| Not shared yet / Ready to download | Only one of the two files exists. | Share / Get secrets. |
+| Not checked yet | No fingerprint yet (e.g. first run on an existing checkout). | Compare once with the password. |
+
+Neither the dashboard nor `status` needs a password to show these states.
 
 **Someone leaves the team / password leaked:**
 
@@ -289,17 +317,18 @@ dashboard assets are not built, run `npm run build:ui` in this repository.
 A local dashboard built with React, [shadcn/ui](https://ui.shadcn.com) (Base UI primitives) and
 Tailwind. It shows:
 
-- every environment in `.dotcrypt.json`: local file and vault file status, sizes, last-modified /
-  last-encrypted times, and the default environment
-- a health badge per environment (Synced, Local changed, Not encrypted, Not decrypted, Vault
-  unreadable, Plaintext tracked)
-- Git safety: whether plaintext files are ignored or (dangerously) tracked, whether `.enc` files are
-  committed, and a one-click fix for missing `.gitignore` rules
+- a short "How sharing works" guide (hide it, and reopen it from **How it works** in the header)
+- one card per environment with a plain-language state (see [Team workflow](#how-dotcrypt-knows-what-changed))
+  and a single button for the next step: **Share changes**, **Get latest**, **Review**, ...
+- the Git command to send a shared `.enc` file to your team (with a copy button), and a hint when a
+  teammate pushed something newer
+- Git safety: whether plaintext files are ignored or (dangerously) tracked, and a one-click fix for
+  missing `.gitignore` rules
 - an activity log for the session
 
-You can initialize a vault, add environments, set the default, and run encrypt, decrypt, diff and
-rotate-key from the dashboard. Overwrites show the key-name diff and need confirmation, just like
-the CLI. The dashboard refreshes every 5 seconds, so changes made in the terminal or by `git pull`
+Less common actions (compare, force share or get, change password, make default) are in each
+card's **⋯** menu. Changes that overwrite a file show the variable names involved and ask for
+confirmation, just like the CLI. The dashboard refreshes every 5 seconds, so changes made in the terminal or by `git pull`
 show up automatically.
 
 ### Dashboard security model

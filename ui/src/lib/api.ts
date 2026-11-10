@@ -5,12 +5,24 @@ export type KeyDiff = {
   unchanged: number
 }
 
+/** Where this machine stands compared with the shared (encrypted) file. Computed without a password. */
+export type SyncState =
+  | "empty"
+  | "not-shared"
+  | "not-downloaded"
+  | "unknown"
+  | "synced"
+  | "local-changes"
+  | "incoming-changes"
+  | "conflict"
+  | "broken"
+
 export type EnvStatus = {
   name: string
   file: string
   encryptedFile: string
   isDefault: boolean
-  localNewerThanVault: boolean
+  sync: SyncState
   local: { exists: boolean; size?: number; modifiedAt?: string; error?: string }
   vault: {
     exists: boolean
@@ -24,7 +36,17 @@ export type EnvStatus = {
     kdf?: { N: number; r: number; p: number }
   }
   git: { inRepo: boolean; tracked?: boolean; ignored?: boolean }
-  vaultGit: { inRepo: boolean; tracked?: boolean }
+  vaultGit: {
+    inRepo: boolean
+    tracked?: boolean
+    /** Changed or new in the working tree. */
+    uncommitted?: boolean
+    /** Committed but not pushed to the upstream branch. */
+    unpushed?: boolean
+    /** The upstream branch has a newer version (after a fetch). */
+    behind?: boolean
+    hasUpstream?: boolean
+  }
 }
 
 export type UninitializedStatus = {
@@ -55,7 +77,7 @@ export type OperationResult = {
   gitignoreAdded?: string[]
 }
 
-export type DiffResult = { environment: string; localExists: boolean; diff: KeyDiff }
+export type DiffResult = { environment: string; localExists: boolean; identical: boolean; diff: KeyDiff }
 
 export type ConfirmationReason = "overwrite" | "password-mismatch" | "unreadable-vault" | "config-exists"
 

@@ -4,12 +4,13 @@ import type { KeyDiff } from "@/lib/api"
 import { ScrollArea } from "@/components/ui/scroll-area"
 import { cn } from "@/lib/utils"
 
-export type DiffLabels = { added: string; removed: string; changed?: string }
+export type DiffLabels = { added: string; removed: string; changed: string }
 
+// KeyDiff compares (shared version -> your file): "added" = only in yours, "removed" = only in the shared one.
 export const DIFF_LABELS = {
-  encrypt: { added: "new in local", removed: "will be removed from vault" },
-  decrypt: { added: "local only — will be lost", removed: "will be restored from vault" },
-  diff: { added: "local only — not yet encrypted", removed: "vault only — missing locally" },
+  encrypt: { added: "new", removed: "removed", changed: "updated" },
+  decrypt: { added: "will be removed from your file", removed: "will be added to your file", changed: "will be updated" },
+  diff: { added: "only in yours", removed: "only in team's", changed: "different value" },
 } satisfies Record<string, DiffLabels>
 
 export function diffSummary(diff: KeyDiff) {
@@ -25,7 +26,7 @@ export function DiffList({ diff, labels, className }: { diff: KeyDiff; labels: D
   const rows = [
     ...diff.added.map((key) => ({ key, kind: "added" as const, label: labels.added })),
     ...diff.removed.map((key) => ({ key, kind: "removed" as const, label: labels.removed })),
-    ...diff.changed.map((key) => ({ key, kind: "changed" as const, label: labels.changed ?? "value differs" })),
+    ...diff.changed.map((key) => ({ key, kind: "changed" as const, label: labels.changed })),
   ]
   if (rows.length === 0) {
     return <p className="text-sm text-muted-foreground">No key differences.</p>

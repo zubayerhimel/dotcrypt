@@ -219,6 +219,36 @@ export function gitStatusOf(root, relPath) {
   };
 }
 
+/** Returns trimmed stdout of a Git command, or null when it fails or Git is unavailable. */
+export function gitOutput(root, args) {
+  try {
+    return execFileSync('git', args, {
+      cwd: root,
+      encoding: 'utf8',
+      stdio: ['ignore', 'pipe', 'ignore'],
+      windowsHide: true,
+    }).trimEnd();
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Describes how far a committed file is from the team:
+ *  - uncommitted: changed or new in the working tree
+ *  - unpushed: committed locally but not on the upstream branch yet
+ *  - behind: the upstream branch has a newer version (visible after a fetch)
+ * Each flag is false when unknown (no repo, no upstream).
+ */
+export function gitShareStatus(root, relPath) {
+  const file = toPosix(relPath);
+  const uncommitted = Boolean(gitOutput(root, ['status', '--porcelain', '--untracked-files=all', '--', file]));
+  const hasUpstream = gitOutput(root, ['rev-parse', '--abbrev-ref', '--symbolic-full-name', '@{u}']) !== null;
+  if (!hasUpstream) return { uncommitted, unpushed: false, behind: false, hasUpstream };
+  const touched = (range) => Boolean(gitOutput(root, ['log', '-1', '--format=%H', range, '--', file]));
+  return { uncommitted, unpushed: touched('@{u}..HEAD'), behind: touched('HEAD..@{u}'), hasUpstream };
+}
+
 export function parseEnv(content) {
   return dotenv.parse(content);
 }

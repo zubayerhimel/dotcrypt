@@ -1,7 +1,6 @@
-import { useCallback, useEffect, useMemo, useState } from "react"
+import { useCallback, useEffect, useState } from "react"
 import {
-  FileKeyIcon,
-  FileTextIcon,
+  CircleHelpIcon,
   LockIcon,
   MoonIcon,
   PlusIcon,
@@ -17,15 +16,17 @@ import { toast } from "sonner"
 import type { DiffResult, EnvStatus, InitializedStatus, OperationResult, UninitializedStatus, VaultStatus } from "@/lib/api"
 import { ApiError, api, hasToken, relativeTime } from "@/lib/api"
 import { ActivityLog, type LogEntry, type LogLevel } from "@/components/activity-log"
-import { EnvCard, envHealth, type EnvAction } from "@/components/env-card"
+import { EnvCard, needsAttention, type EnvAction } from "@/components/env-card"
+import { HowItWorks } from "@/components/how-it-works"
 import { InitView } from "@/components/init-view"
 import { useTheme } from "@/components/theme-provider"
 import {
   AddEnvironmentDialog,
   ConfirmDialog,
-  DiffDialog,
+  CompareDialog,
   PasswordDialog,
   RotateDialog,
+  type Choice,
   type PasswordMode,
   type PendingConfirmation,
 } from "@/components/vault-dialogs"
@@ -39,6 +40,7 @@ import { Toaster } from "@/components/ui/sonner"
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip"
 
 const POLL_MS = 5000
+const GUIDE_HIDDEN_KEY = "dotcrypt-guide-hidden"
 
 type WriteMode = "encrypt" | "decrypt"
 type Options = { overwrite?: boolean; replaceExisting?: boolean }
@@ -59,6 +61,7 @@ export function App() {
   const [rotateEnv, setRotateEnv] = useState<EnvStatus | null>(null)
   const [addOpen, setAddOpen] = useState(false)
   const [log, setLog] = useState<LogEntry[]>([])
+  const [guideOpen, setGuideOpen] = useState(() => localStorage.getItem(GUIDE_HIDDEN_KEY) !== "1")
 
   const initialized = status?.initialized ? status : null
   const unlockedCount = Object.keys(passwords).length
@@ -117,15 +120,18 @@ export function App() {
 
   const reportResult = (env: EnvStatus, mode: WriteMode, result: OperationResult) => {
     if (result.status === "unchanged") {
-      const message = `${mode === "encrypt" ? env.encryptedFile : env.file} is already up to date`
+      const message =
+        mode === "encrypt" ? `${env.name}: nothing new to share` : `${env.name}: your ${env.file} is already up to date`
       addLog("info", message)
       toast.info(message)
     } else if (mode === "encrypt") {
-      addLog("success", `Encrypted ${env.file} → ${env.encryptedFile} (${result.status}). Commit it to share.`)
-      toast.success(`Encrypted ${env.name}`, { description: `Commit ${env.encryptedFile} to share it.` })
+      addLog("success", `Encrypted ${env.file} → ${env.encryptedFile}. Commit and push it to send it to your team.`)
+      toast.success(`${env.name} is ready to send`, {
+        description: `Last step: commit and push ${env.encryptedFile}. The card shows the command.`,
+      })
     } else {
-      addLog("success", `Decrypted ${env.encryptedFile} → ${env.file} (${result.status})`)
-      toast.success(`Decrypted ${env.name}`)
+      addLog("success", `Updated ${env.file} from ${env.encryptedFile}`)
+      toast.success(`${env.name} is up to date`, { description: `${env.file} now has your team's latest secrets.` })
     }
     reportWarnings(result.warnings)
   }
@@ -135,8 +141,10 @@ export function App() {
     setBusy({ env: env.name, action: mode })
     try {
       if (mode === "diff") {
-        setDiffResult(await api.diff(env.name, { password }))
-        addLog("info", `Compared ${env.file} with ${env.encryptedFile}`)
+        const result = await api.diff(env.name, { password })
+        addLog("info", `Compared ${env.file} with ${env.encryptedFile}: ${result.identical ? "same" : "different"}`)
+        if (result.identical) toast.success(`${env.name} is up to date`, { description: `${env.file} matches your team's version.` })
+        else setDiffResult(result)
       } else {
         const call = mode === "encrypt" ? api.encrypt : api.decrypt
         reportResult(env, mode, await call(env.name, { password, ...options }))
@@ -147,7 +155,7 @@ export function App() {
       if (err instanceof ApiError && err.needsConfirmation && mode !== "diff") {
         if (err.reason === "overwrite") remember(env.name, password)
         setPrompt(null)
-        setConfirmation({ env: env.name, action: mode, error: err, password, options })
+        setConfirmation({ env, action: mode, error: err, password, options })
         return
       }
       if (err instanceof ApiError && err.code === "DECRYPT_FAILED") forget(env.name)
@@ -192,13 +200,20 @@ export function App() {
 
   const onConfirm = async () => {
     if (!confirmation) return
-    const env = initialized?.environments.find((e) => e.name === confirmation.env)
-    const { action, password, options, error } = confirmation
+    const { env, action, password, options, error } = confirmation
     setConfirmation(null)
-    if (!env) return
     const next: Options =
       error.reason === "overwrite" ? { ...options, overwrite: true } : { ...options, overwrite: true, replaceExisting: true }
     await execute(env, action, password, next).catch(fail(`${action} ${env.name} failed`))
+  }
+
+  const onChoose = async (choice: Choice) => {
+    const env = initialized?.environments.find((e) => e.name === diffResult?.environment)
+    const password = env && passwords[env.name]
+    if (!env || !password) return setDiffResult(null)
+    await execute(env, choice, password, { overwrite: true })
+      .then(() => setDiffResult(null))
+      .catch(fail(`${choice === "encrypt" ? "Sharing" : "Updating"} ${env.name} failed`))
   }
 
   const onRotate = async ({ oldPassword, newPassword }: { oldPassword: string; newPassword: string }) => {
@@ -209,8 +224,10 @@ export function App() {
       await api.rotate(env.name, { oldPassword, newPassword })
       remember(env.name, newPassword)
       setRotateEnv(null)
-      addLog("success", `Rotated key for ${env.encryptedFile}. Commit it and share the new password securely.`)
-      toast.success(`Rotated key for ${env.name}`, { description: "Share the new password over a secure channel." })
+      addLog("success", `Changed the ${env.name} password. Commit and push ${env.encryptedFile}, then give teammates the new password privately.`)
+      toast.success(`Changed the ${env.name} password`, {
+        description: `Commit and push ${env.encryptedFile}, then give teammates the new password privately.`,
+      })
     } catch (err) {
       if (err instanceof ApiError && err.code === "DECRYPT_FAILED") forget(env.name)
       if (err instanceof Error) addLog("error", `rotate ${env.name}: ${err.message}`)
@@ -249,6 +266,11 @@ export function App() {
       })
       .catch(fail("Could not update .gitignore"))
 
+  const showGuide = (open: boolean) => {
+    setGuideOpen(open)
+    localStorage.setItem(GUIDE_HIDDEN_KEY, open ? "0" : "1")
+  }
+
   const lockAll = () => {
     setPasswords({})
     addLog("info", "Locked: cleared all passwords from memory")
@@ -265,6 +287,7 @@ export function App() {
           onRefresh={() => void refresh(true)}
           onLock={lockAll}
           onAdd={initialized ? () => setAddOpen(true) : undefined}
+          onHelp={initialized && !guideOpen ? () => showGuide(true) : undefined}
         />
         <main className="mx-auto grid max-w-6xl gap-6 px-4 py-6 sm:px-6">
           {!hasToken() || loadError?.status === 401 ? (
@@ -287,6 +310,7 @@ export function App() {
               onAction={handleAction}
               onRepairGitignore={onRepairGitignore}
               offline={Boolean(loadError)}
+              guide={guideOpen ? <HowItWorks onHide={() => showGuide(false)} /> : null}
             />
           )}
           <Card>
@@ -308,10 +332,11 @@ export function App() {
         onSubmit={onPasswordSubmit}
       />
       <ConfirmDialog pending={confirmation} onCancel={() => setConfirmation(null)} onConfirm={onConfirm} />
-      <DiffDialog
+      <CompareDialog
         result={diffResult}
         env={initialized?.environments.find((e) => e.name === diffResult?.environment)}
         onOpenChange={(open) => !open && setDiffResult(null)}
+        onChoose={onChoose}
       />
       <RotateDialog
         env={rotateEnv}
@@ -332,6 +357,7 @@ function Header({
   onRefresh,
   onLock,
   onAdd,
+  onHelp,
 }: {
   status: VaultStatus | null
   refreshing: boolean
@@ -339,6 +365,7 @@ function Header({
   onRefresh: () => void
   onLock: () => void
   onAdd?: () => void
+  onHelp?: () => void
 }) {
   const { theme, setTheme } = useTheme()
   const isDark = theme === "dark" || (theme === "system" && window.matchMedia("(prefers-color-scheme: dark)").matches)
@@ -356,6 +383,12 @@ function Header({
             {status?.root ?? "dotcrypt dashboard"}
           </p>
         </div>
+        {onHelp && (
+          <Button variant="ghost" size="sm" onClick={onHelp}>
+            <CircleHelpIcon data-icon="inline-start" />
+            <span className="hidden sm:inline">How it works</span>
+          </Button>
+        )}
         {unlockedCount > 0 && (
           <Button variant="outline" size="sm" onClick={onLock}>
             <LockIcon data-icon="inline-start" />
@@ -403,6 +436,7 @@ function Dashboard({
   onAction,
   onRepairGitignore,
   offline,
+  guide,
 }: {
   status: InitializedStatus
   passwords: Record<string, string>
@@ -410,16 +444,9 @@ function Dashboard({
   onAction: (env: EnvStatus, action: EnvAction) => void
   onRepairGitignore: () => void
   offline: boolean
+  guide: React.ReactNode
 }) {
-  const stats = useMemo(() => {
-    const envs = status.environments
-    return {
-      total: envs.length,
-      encrypted: envs.filter((e) => e.vault.valid).length,
-      local: envs.filter((e) => e.local.exists).length,
-      attention: envs.filter((e) => ["warn", "danger"].includes(envHealth(e).tone)).length,
-    }
-  }, [status.environments])
+  const attention = status.environments.filter(needsAttention).length
   const tracked = status.environments.filter((e) => e.git.tracked)
 
   return (
@@ -462,19 +489,14 @@ function Dashboard({
         </Alert>
       )}
 
-      <section className="grid grid-cols-2 gap-3 md:grid-cols-4">
-        <Stat label="Environments" value={stats.total} detail={`default: ${status.defaultEnvironment}`} />
-        <Stat label="Encrypted" value={stats.encrypted} detail="valid .enc files" icon={<FileKeyIcon />} />
-        <Stat label="Local files" value={stats.local} detail="decrypted on this machine" icon={<FileTextIcon />} />
-        <Stat
-          label="Need attention"
-          value={stats.attention}
-          detail={stats.attention ? "see cards below" : "all good"}
-          icon={<TriangleAlertIcon />}
-          highlight={stats.attention > 0}
-        />
-      </section>
+      {guide}
 
+      <div className="flex items-baseline justify-between gap-2">
+        <h2 className="text-sm font-medium">Environments</h2>
+        <p className="text-xs text-muted-foreground">
+          {attention ? `${attention} need${attention === 1 ? "s" : ""} your attention` : "Everything is up to date"}
+        </p>
+      </div>
       <section className="grid gap-4 md:grid-cols-2 xl:grid-cols-3">
         {status.environments.map((env) => (
           <EnvCard
@@ -492,35 +514,6 @@ function Dashboard({
         config in <code className="font-mono">{status.configFile}</code>
       </p>
     </>
-  )
-}
-
-function Stat({
-  label,
-  value,
-  detail,
-  icon,
-  highlight,
-}: {
-  label: string
-  value: number
-  detail: string
-  icon?: React.ReactNode
-  highlight?: boolean
-}) {
-  return (
-    <Card size="sm">
-      <CardHeader>
-        <CardDescription className="flex items-center gap-1.5 [&_svg]:size-3.5">
-          {icon}
-          {label}
-        </CardDescription>
-        <CardTitle className={highlight ? "text-2xl text-amber-600 tabular-nums dark:text-amber-400" : "text-2xl tabular-nums"}>
-          {value}
-        </CardTitle>
-      </CardHeader>
-      <CardContent className="truncate text-xs text-muted-foreground">{detail}</CardContent>
-    </Card>
   )
 }
 
