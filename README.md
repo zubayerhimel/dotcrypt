@@ -24,8 +24,8 @@ dotcrypt --help
 Requires Node.js **20.19+** (needed to build the dashboard; the CLI alone runs on 18.17+).
 
 ```bash
-git clone https://github.com/zubayerhimel/secretly.git
-cd secretly
+git clone https://github.com/zubayerhimel/dotcrypt.git
+cd dotcrypt
 npm run setup       # installs CLI + dashboard dependencies and builds the dashboard
 npm link            # exposes the `dotcrypt` command globally
 dotcrypt --help

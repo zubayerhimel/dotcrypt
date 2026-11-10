@@ -33,11 +33,11 @@
   "license": "MIT",
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/zubayerhimel/secretly.git"
+    "url": "git+https://github.com/zubayerhimel/dotcrypt.git"
   },
-  "homepage": "https://github.com/zubayerhimel/secretly#readme",
+  "homepage": "https://github.com/zubayerhimel/dotcrypt#readme",
   "bugs": {
-    "url": "https://github.com/zubayerhimel/secretly/issues"
+    "url": "https://github.com/zubayerhimel/dotcrypt/issues"
   },
   "engines": {
     "node": ">=18.17"
