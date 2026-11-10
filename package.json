@@ -1,6 +1,6 @@
 {
   "name": "dotcrypt",
-  "version": "1.1.0",
+  "version": "1.2.0",
   "description": "Securely sync multiple .env environments across machines via Git using AES-256-GCM encrypted files.",
   "type": "module",
   "main": "src/crypto.js",
