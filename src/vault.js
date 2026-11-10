@@ -343,7 +343,7 @@ export function diffEnvironment(ctx, name, password) {
 }
 
 /**
- * Creates .env-vault.json in root and protects plaintext files in .gitignore.
+ * Creates .dotcrypt.json in root and protects plaintext files in .gitignore.
  * @throws {ConfirmationRequiredError} when a config already exists and overwrite is false.
  */
 export function initVault(root, { name, environments, defaultEnvironment, overwrite = false } = {}) {

@@ -399,7 +399,7 @@ function AddEnvironmentForm({ onSubmit }: { onSubmit: Submit<{ name: string; fil
     <form onSubmit={submit} className="grid gap-4">
       <DialogHeader>
         <DialogTitle>Add environment</DialogTitle>
-        <DialogDescription>Adds a mapping to .env-vault.json and protects the local file in .gitignore.</DialogDescription>
+        <DialogDescription>Adds a mapping to .dotcrypt.json and protects the local file in .gitignore.</DialogDescription>
       </DialogHeader>
       <FieldGroup>
         <Field>

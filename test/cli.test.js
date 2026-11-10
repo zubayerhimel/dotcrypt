@@ -19,7 +19,7 @@ function cli(cwd, args, password) {
 }
 
 test('encrypt --force never re-keys a vault protected by a different password; --replace does', () => {
-  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'dvc-cli-'));
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'dotcrypt-cli-'));
   assert.equal(cli(root, ['init', '-y', '--envs', 'development'], PASSWORD).status, 0);
   fs.writeFileSync(path.join(root, '.env.development'), 'A=1\n');
   assert.equal(cli(root, ['encrypt'], PASSWORD).status, 0);
@@ -39,9 +39,9 @@ test('encrypt --force never re-keys a vault protected by a different password; -
 });
 
 test('init rejects invalid environment names with a clear message', () => {
-  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'dvc-cli-'));
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'dotcrypt-cli-'));
   const res = cli(root, ['init', '-y', '--envs', 'dev,my env'], PASSWORD);
   assert.equal(res.status, 1);
   assert.match(res.stderr, /Invalid environment name\(s\): "my env"/);
-  assert.equal(fs.existsSync(path.join(root, '.env-vault.json')), false);
+  assert.equal(fs.existsSync(path.join(root, '.dotcrypt.json')), false);
 });

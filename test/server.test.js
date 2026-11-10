@@ -11,7 +11,7 @@ let ui;
 let root;
 
 before(async () => {
-  root = fs.mkdtempSync(path.join(os.tmpdir(), 'dvc-server-'));
+  root = fs.mkdtempSync(path.join(os.tmpdir(), 'dotcrypt-server-'));
   ui = await startUiServer({ cwd: root, onLog: () => {} });
 });
 

@@ -2,7 +2,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { VaultError, resolveInside, safeReadFile, safeWriteFile } from './utils.js';
 
-export const CONFIG_FILENAME = '.env-vault.json';
+export const CONFIG_FILENAME = '.dotcrypt.json';
 export const CONFIG_VERSION = 1;
 export const DEFAULT_ENVIRONMENTS = Object.freeze(['development', 'staging', 'production']);
 export const ENV_NAME_PATTERN = /^[a-z0-9](?:[a-z0-9_-]{0,62}[a-z0-9])?$/i;
@@ -35,7 +35,7 @@ export function defaultFileMapping(envName) {
 }
 
 /**
- * Validates a parsed .env-vault.json, collecting every problem into one error.
+ * Validates a parsed .dotcrypt.json, collecting every problem into one error.
  */
 export function validateConfig(config) {
   if (!isPlainObject(config)) throw new VaultError(`${CONFIG_FILENAME} must contain a JSON object.`);
@@ -110,7 +110,7 @@ export function createConfig({ name, environments = DEFAULT_ENVIRONMENTS, defaul
   return validateConfig(config);
 }
 
-/** Walks up from startDir to find the directory containing .env-vault.json. */
+/** Walks up from startDir to find the directory containing .dotcrypt.json. */
 export function findProjectRoot(startDir = process.cwd()) {
   let dir = path.resolve(startDir);
   for (;;) {

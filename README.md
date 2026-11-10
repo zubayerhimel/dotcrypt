@@ -2,10 +2,10 @@
 
 Securely sync multiple `.env` environments across machines **through your existing Git repository**.
 Plaintext env files stay local and git-ignored; only AES-256-GCM encrypted `.enc` files and a shared
-`.env-vault.json` configuration are committed.
+`.dotcrypt.json` configuration are committed.
 
 ```
-.env-vault.json            <- committed: environments + file mappings (no secrets)
+.dotcrypt.json             <- committed: environments + file mappings (no secrets)
 .env.development           <- local only (git-ignored)
 .env.development.enc       <- committed: encrypted with AES-256-GCM
 .env.production            <- local only (git-ignored)
@@ -50,7 +50,7 @@ To uninstall the global link: `npm unlink -g dotcrypt`.
 
 ```bash
 cd path/to/your-project
-dotcrypt init        # creates .env-vault.json and updates .gitignore
+dotcrypt init        # creates .dotcrypt.json and updates .gitignore
 dotcrypt ui          # opens the dashboard in your browser
 ```
 
@@ -60,7 +60,7 @@ Prefer the terminal? Everything in the dashboard is also available as a CLI comm
 
 | Command | Description |
 | --- | --- |
-| `init [-n name] [--envs a,b,c] [-d env] [-y] [-f]` | Create `.env-vault.json` and add ignore rules for plaintext env files to `.gitignore`. |
+| `init [-n name] [--envs a,b,c] [-d env] [-y] [-f]` | Create `.dotcrypt.json` and add ignore rules for plaintext env files to `.gitignore`. |
 | `encrypt [-e env] [-p password] [-f] [--replace]` | Encrypt the mapped local file (e.g. `.env.staging`) into its `.enc` file. |
 | `decrypt [-e env] [-p password] [-f]` | Decrypt the `.enc` file into the mapped local file. |
 | `rotate-key [-e env] [-o old] [-n new]` | Re-encrypt with a new password, a fresh salt and a fresh IV. |
@@ -92,7 +92,7 @@ Passwords are resolved in this order:
   passwords with `rotate-key`. To deliberately discard a vault file that is unreadable, belongs to
   another environment, or uses a different password, pass `--replace` (`--force` alone never does
   this). When the password was typed at a prompt, you must re-enter it before the vault is replaced.
-- `init` refuses to overwrite an existing `.env-vault.json` without confirmation or `--force`.
+- `init` refuses to overwrite an existing `.dotcrypt.json` without confirmation or `--force`.
 - Non-interactive sessions (CI, pipes) never prompt; they fail safely unless `--force` is given.
 
 ### Exit codes
@@ -104,7 +104,7 @@ Passwords are resolved in this order:
 | `2` | Wrong password or corrupted / tampered encrypted file |
 | `130` | Cancelled at a prompt (Ctrl+C) |
 
-## `.env-vault.json`
+## `.dotcrypt.json`
 
 ```json
 {
@@ -139,11 +139,11 @@ Custom plaintext paths that the default `.env` / `.env.*` rules don't cover are 
 **Project owner (once):**
 
 ```bash
-dotcrypt init                     # creates .env-vault.json, updates .gitignore
+dotcrypt init                     # creates .dotcrypt.json, updates .gitignore
 # create .env.development, .env.staging, ...
 dotcrypt encrypt -e development   # choose a strong password
 dotcrypt encrypt -e production    # use a *different* password per environment
-git add .env-vault.json .gitignore *.enc
+git add .dotcrypt.json .gitignore *.enc
 git commit -m "Add encrypted environments"
 ```
 
@@ -239,7 +239,7 @@ Each `.enc` file is a JSON envelope:
 - **Atomic writes:** output is written to an exclusive (`wx`) temp file, `fsync`ed, then renamed
   over the target, so crashes never leave truncated `.env` or `.enc` files.
 - **Restrictive permissions:** decrypted plaintext files are created with mode `0600`.
-- **Path confinement:** all paths from `.env-vault.json` must resolve inside the project root.
+- **Path confinement:** all paths from `.dotcrypt.json` must resolve inside the project root.
 - **Symlink protection:** the tool refuses to read or write through symlinks, or through
   symlinked directories that resolve outside the project. A malicious repository therefore can't
   make `decrypt` overwrite e.g. `~/.bashrc`, or make `encrypt` pull `~/.ssh/id_rsa` into a
@@ -267,7 +267,7 @@ Each `.enc` file is a JSON envelope:
 
 1. Make sure you ran `npm run setup` (or `npm run build:ui`) once in this repository.
 2. In a terminal, go to the project whose env files you want to manage (the folder with
-   `.env-vault.json`, or any folder if you want to create one from the dashboard).
+   `.dotcrypt.json`, or any folder if you want to create one from the dashboard).
 3. Run:
 
    ```bash
@@ -289,7 +289,7 @@ dashboard assets are not built, run `npm run build:ui` in this repository.
 A local dashboard built with React, [shadcn/ui](https://ui.shadcn.com) (Base UI primitives) and
 Tailwind. It shows:
 
-- every environment in `.env-vault.json`: local file and vault file status, sizes, last-modified /
+- every environment in `.dotcrypt.json`: local file and vault file status, sizes, last-modified /
   last-encrypted times, and the default environment
 - a health badge per environment (Synced, Local changed, Not encrypted, Not decrypted, Vault
   unreadable, Plaintext tracked)
@@ -338,7 +338,7 @@ npm test
 ```
 
 Source layout: `src/crypto.js` (envelope format and AES-256-GCM/scrypt), `src/config.js`
-(`.env-vault.json`), `src/utils.js` (filesystem and Git safety), `src/vault.js` (operations shared
+(`.dotcrypt.json`), `src/utils.js` (filesystem and Git safety), `src/vault.js` (operations shared
 by the CLI and dashboard), `src/server.js` (dashboard server), `bin/cli.js` (Commander CLI) and
 `ui/` (dashboard).
 

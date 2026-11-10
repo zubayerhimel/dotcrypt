@@ -7,7 +7,7 @@ import { createConfig, validateConfig } from '../src/config.js';
 import { VaultError, diffEnv, ensureGitignore, resolveInside } from '../src/utils.js';
 
 function tmpDir() {
-  return fs.mkdtempSync(path.join(os.tmpdir(), 'dvc-'));
+  return fs.mkdtempSync(path.join(os.tmpdir(), 'dotcrypt-'));
 }
 
 test('createConfig maps environments to default files', () => {

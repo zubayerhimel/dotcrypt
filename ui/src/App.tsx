@@ -232,7 +232,7 @@ export function App() {
 
   const onInit = async (value: { name: string; environments: string[]; defaultEnvironment?: string }) => {
     const result = await api.init(value)
-    addLog("success", `Created .env-vault.json with ${value.environments.join(", ")}`)
+    addLog("success", `Created .dotcrypt.json with ${value.environments.join(", ")}`)
     if (result.gitignoreAdded?.length) addLog("info", `.gitignore: added ${result.gitignoreAdded.join(", ")}`)
     reportWarnings(result.warnings)
     toast.success("Vault initialized")

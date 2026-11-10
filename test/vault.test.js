@@ -11,7 +11,7 @@ import { decryptEnvironment, diffEnvironment, encryptEnvironment, initVault, rot
 const PASSWORD = 'correct horse battery';
 
 function setup() {
-  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'dvc-vault-'));
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'dotcrypt-vault-'));
   initVault(root, { name: 'app', environments: ['development'] });
   fs.writeFileSync(path.join(root, '.env.development'), 'A=1\nB=2\n');
   return { root, ctx: loadConfig(root) };
@@ -55,7 +55,7 @@ test('encrypt with a different password requires replaceExisting', () => {
 });
 
 test('encrypt treats a vault file from another environment as unreadable', () => {
-  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'dvc-vault-'));
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'dotcrypt-vault-'));
   initVault(root, { name: 'app', environments: ['development', 'staging'] });
   fs.writeFileSync(path.join(root, '.env.development'), 'A=1\n');
   fs.writeFileSync(path.join(root, '.env.staging'), 'A=2\n');
