@@ -66,6 +66,9 @@ Prefer the terminal? Everything in the dashboard is also available as a CLI comm
 | `decrypt [-e env] [-p password] [-f]` | Decrypt the `.enc` file into the mapped local file. |
 | `rotate-key [-e env] [-o old] [-n new]` | Re-encrypt with a new password, a fresh salt and a fresh IV. |
 | `diff [-e env] [-p password] [--exit-code]` | Show **key names** that were added / removed / changed. Values are never printed. |
+| `set <KEY=value \| KEY>... [-e env] [-p password]` | Set variables in the vault and your local file. A bare `KEY` asks for a hidden value (or reads stdin). |
+| `get <KEY> [-e env] [-p password]` | Print one variable from the vault. Exits 1 if it is not set. |
+| `unset <KEY>... [-e env] [-p password]` | Remove variables from the vault and your local file. |
 | `run [-e env] [-p password] [--override] -- <command>` | Run a command with the decrypted variables set. Nothing is written to disk. |
 | `ui [--port n] [--no-open]` | Open the local web dashboard (see below). |
 
@@ -161,6 +164,10 @@ same thing in the terminal.
    (CLI: `dotcrypt encrypt -e <env>`).
 3. Commit and push the `.enc` file. The card shows the command, for example:
    `git add .env.development.enc && git commit -m "Update development secrets" && git push`.
+
+Shortcut for a single variable: `dotcrypt set API_URL=https://api.example.com -e development`
+updates the `.enc` file and your local file in one go (use `dotcrypt set STRIPE_KEY` to type a
+secret at a hidden prompt). Then commit and push the `.enc` file as above.
 
 **A teammate changed something:**
 

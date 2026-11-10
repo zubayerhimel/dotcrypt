@@ -28,8 +28,10 @@ import {
   newPasswordProblem,
   readEnvironmentVariables,
   rotateEnvironmentKey,
+  updateEnvironmentVariables,
   verifyPassword,
 } from '../src/vault.js';
+import { assertValidKey } from '../src/envfile.js';
 import { isUiBuilt, openBrowser, startUiServer } from '../src/server.js';
 
 const require = createRequire(import.meta.url);
@@ -441,8 +443,13 @@ async function diffCommand(opts) {
   if (opts.exitCode) process.exitCode = 1;
 }
 
-async function runCommand(command, opts) {
-  const ctx = loadConfig();
+async function readStdin() {
+  const chunks = [];
+  for await (const chunk of process.stdin) chunks.push(chunk);
+  return Buffer.concat(chunks).toString('utf8').replace(/\r?\n$/, '');
+}
+
+async function vaultPassword(ctx, opts) {
   const env = await pickEnvironment(ctx, opts.env);
   loadEnvelope(ctx, env);
   const password = await resolvePassword({
@@ -451,6 +458,75 @@ async function runCommand(command, opts) {
     envVar: PASSWORD_ENV,
     message: `Vault password for "${env.name}"`,
   });
+  return { env, password };
+}
+
+/** Parses KEY=value arguments. A bare KEY means "ask for the value" (hidden prompt, or stdin when piped). */
+async function resolveAssignments(items) {
+  const set = {};
+  const asks = [];
+  for (const item of items) {
+    const eq = item.indexOf('=');
+    const key = eq === -1 ? item : item.slice(0, eq);
+    assertValidKey(key);
+    if (eq === -1) asks.push(key);
+    else set[key] = item.slice(eq + 1);
+  }
+  if (asks.length && !process.stdin.isTTY) {
+    if (asks.length > 1) throw new VaultError('Only one value can be read from stdin.', { hint: 'Run one "set KEY" per variable.' });
+    set[asks[0]] = await readStdin();
+  } else {
+    for (const key of asks) {
+      const { value } = await ask({ type: 'password', name: 'value', message: `Value for ${key}` });
+      set[key] = value;
+    }
+  }
+  return set;
+}
+
+function reportVariableUpdate(env, result) {
+  if (result.missing?.length) log.warn(`Not found in ${env.name}: ${result.missing.map(sanitizeForTerminal).join(', ')}`);
+  if (result.status === 'unchanged') {
+    log.success('Nothing changed.');
+    return;
+  }
+  const parts = [];
+  if (result.set.length) parts.push(`set ${result.set.join(', ')}`);
+  if (result.unset.length) parts.push(`removed ${result.unset.join(', ')}`);
+  const files = result.localUpdated ? `${env.encryptedFile} and ${env.file}` : env.encryptedFile;
+  log.success(`${env.name}: ${parts.join('; ')} (updated ${files})`);
+  printWarnings(result.warnings);
+  log.dim(`Share it with your team: ${shareCommand(env)}`);
+}
+
+async function setCommand(assignments, opts) {
+  const ctx = loadConfig();
+  const set = await resolveAssignments(assignments);
+  const { env, password } = await vaultPassword(ctx, opts);
+  reportVariableUpdate(env, updateEnvironmentVariables(ctx, env.name, password, { set }));
+}
+
+async function unsetCommand(keys, opts) {
+  keys.forEach(assertValidKey);
+  const ctx = loadConfig();
+  const { env, password } = await vaultPassword(ctx, opts);
+  reportVariableUpdate(env, updateEnvironmentVariables(ctx, env.name, password, { unset: keys }));
+}
+
+async function getCommand(key, opts) {
+  assertValidKey(key);
+  const ctx = loadConfig();
+  const { env, password } = await vaultPassword(ctx, opts);
+  const vars = readEnvironmentVariables(ctx, env.name, password);
+  if (!Object.hasOwn(vars, key)) {
+    throw new VaultError(`${key} is not set in ${env.name}.`, { hint: `Set it with: dotcrypt set ${key} -e ${env.name}` });
+  }
+  process.stdout.write(process.stdout.isTTY ? `${vars[key]}\n` : vars[key]);
+}
+
+async function runCommand(command, opts) {
+  const ctx = loadConfig();
+  const { env, password } = await vaultPassword(ctx, opts);
   const vars = readEnvironmentVariables(ctx, env.name, password);
 
   const childEnv = { ...process.env };
@@ -590,6 +666,34 @@ program
   .option('-p, --password <password>', 'vault password (prompted if omitted)')
   .option('--exit-code', 'exit with status 1 when differences are found')
   .action(diffCommand);
+
+program
+  .command('set')
+  .description('set variables in the shared vault (and your local file), e.g. set API_URL=https://x')
+  .argument('<KEY[=value]...>', 'variables to set; a bare KEY prompts for a hidden value or reads it from stdin')
+  .option('-e, --env <name>', 'environment name')
+  .option('-p, --password <password>', 'vault password (prompted if omitted)')
+  .addHelpText(
+    'after',
+    '\nExamples:\n  $ dotcrypt set LOG_LEVEL=debug -e development\n  $ dotcrypt set STRIPE_KEY -e production        # hidden prompt, stays out of shell history\n  $ pbpaste | dotcrypt set STRIPE_KEY -e production',
+  )
+  .action(setCommand);
+
+program
+  .command('get')
+  .description('print one variable from the shared vault')
+  .argument('<KEY>', 'variable name')
+  .option('-e, --env <name>', 'environment name')
+  .option('-p, --password <password>', 'vault password (prompted if omitted)')
+  .action(getCommand);
+
+program
+  .command('unset')
+  .description('remove variables from the shared vault (and your local file)')
+  .argument('<KEY...>', 'variables to remove')
+  .option('-e, --env <name>', 'environment name')
+  .option('-p, --password <password>', 'vault password (prompted if omitted)')
+  .action(unsetCommand);
 
 program
   .command('run')

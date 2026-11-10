@@ -24,6 +24,7 @@ import {
   safeReadFile,
   safeWriteFile,
 } from './utils.js';
+import { assertValidKey, editEnvContent } from './envfile.js';
 import { computeSync, fingerprint, fingerprintFile, openSyncState } from './sync.js';
 
 export const MIN_PASSWORD_LENGTH = 12;
@@ -349,6 +350,61 @@ export function readEnvironmentVariables(ctx, name, password) {
     return parseEnv(plaintext);
   } finally {
     plaintext.fill(0);
+  }
+}
+
+/**
+ * Sets and/or removes variables in the shared vault file, and applies the same edit to the local file
+ * when it exists. Other lines, comments and formatting are kept.
+ * Returns the keys that actually changed; status is "unchanged" when nothing did.
+ */
+export function updateEnvironmentVariables(ctx, name, password, { set = {}, unset = [] } = {}) {
+  assertPasswordProvided(password);
+  for (const key of [...Object.keys(set), ...unset]) assertValidKey(key);
+  const env = resolveEnvironment(ctx, name);
+  const envelope = loadEnvelope(ctx, env);
+  const plaintext = decryptOrFail(envelope, password, env);
+  const localBefore = fileExists(env.plainPath) ? safeReadFile(ctx.root, env.plainPath) : null;
+
+  try {
+    const before = parseEnv(plaintext);
+    const changed = { set: [], unset: [], missing: [] };
+    for (const [key, value] of Object.entries(set)) if (before[key] !== value) changed.set.push(key);
+    for (const key of unset) (Object.hasOwn(before, key) ? changed.unset : changed.missing).push(key);
+    if (!changed.set.length && !changed.unset.length) return { status: 'unchanged', environment: env.name, ...changed };
+
+    const syncState = openSyncState(ctx.root);
+    const baseline = syncState.get(env.name);
+    const vaultWasBaseline = baseline?.vault === fingerprintFile(env.encPath);
+    const localWasInSync =
+      localBefore !== null &&
+      (buffersEqual(localBefore, plaintext) || (vaultWasBaseline && baseline.local === fingerprint(localBefore)));
+
+    const nextVault = Buffer.from(editEnvContent(plaintext.toString('utf8'), { set, unset }), 'utf8');
+    const nextLocal = localBefore && Buffer.from(editEnvContent(localBefore.toString('utf8'), { set, unset }), 'utf8');
+    try {
+      const updated = encrypt(nextVault, password, { environment: env.name, sourceFile: env.file });
+      safeWriteFile(ctx.root, env.encPath, serializeEnvelope(updated), { mode: 0o644 });
+      if (nextLocal) safeWriteFile(ctx.root, env.plainPath, nextLocal, { mode: 0o600 });
+
+      // Keep "unshared changes" visible if the local file already had some; otherwise both sides are in sync.
+      const vaultHash = fingerprintFile(env.encPath);
+      if (localWasInSync) syncState.set(env.name, { local: fingerprint(nextLocal), vault: vaultHash });
+      else if (vaultWasBaseline) syncState.set(env.name, { local: baseline.local, vault: vaultHash });
+    } finally {
+      nextVault.fill(0);
+      nextLocal?.fill(0);
+    }
+    return {
+      status: 'updated',
+      environment: env.name,
+      ...changed,
+      localUpdated: Boolean(nextLocal),
+      warnings: nextLocal ? plaintextWarnings(ctx.root, env.file) : [],
+    };
+  } finally {
+    plaintext.fill(0);
+    localBefore?.fill(0);
   }
 }
 

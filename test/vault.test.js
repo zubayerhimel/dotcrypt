@@ -6,14 +6,16 @@ import path from 'node:path';
 import { execFileSync } from 'node:child_process';
 
 import { loadConfig } from '../src/config.js';
-import { ConfirmationRequiredError } from '../src/utils.js';
+import { ConfirmationRequiredError, parseEnv } from '../src/utils.js';
 import {
   decryptEnvironment,
   diffEnvironment,
   encryptEnvironment,
   getEnvironmentStatus,
   initVault,
+  readEnvironmentVariables,
   rotateEnvironmentKey,
+  updateEnvironmentVariables,
 } from '../src/vault.js';
 
 const PASSWORD = 'correct horse battery';
@@ -158,4 +160,31 @@ test('sync state is unknown until a matching diff confirms it', () => {
   assert.equal(syncOf(ctx), 'unknown');
   diffEnvironment(ctx, 'development', PASSWORD);
   assert.equal(syncOf(ctx), 'synced');
+});
+
+test('updateEnvironmentVariables edits vault and local file in place and keeps them in sync', () => {
+  const { root, ctx } = gitSetup();
+  const plain = path.join(root, '.env.development');
+  fs.writeFileSync(plain, '# database\nexport DB=old\nA=1\nGONE=x\n');
+  encryptEnvironment(ctx, 'development', PASSWORD);
+
+  const result = updateEnvironmentVariables(ctx, 'development', PASSWORD, {
+    set: { DB: 'postgres://u:p@h/db', NEW: "it's #1\nline two" },
+    unset: ['GONE', 'NOPE'],
+  });
+  assert.deepEqual([result.status, result.set, result.unset, result.missing], ['updated', ['DB', 'NEW'], ['GONE'], ['NOPE']]);
+  const local = fs.readFileSync(plain, 'utf8');
+  assert.match(local, /^# database\nexport DB=/);
+  assert.deepEqual(parseEnv(local), { DB: 'postgres://u:p@h/db', A: '1', NEW: "it's #1\nline two" });
+  assert.deepEqual(readEnvironmentVariables(ctx, 'development', PASSWORD), parseEnv(local));
+  assert.equal(syncOf(ctx), 'synced');
+
+  assert.equal(updateEnvironmentVariables(ctx, 'development', PASSWORD, { set: { A: '1' } }).status, 'unchanged');
+
+  // Unshared local edits stay visible as local changes after a set.
+  fs.appendFileSync(plain, 'MINE=1\n');
+  updateEnvironmentVariables(ctx, 'development', PASSWORD, { set: { A: '2' } });
+  assert.equal(parseEnv(fs.readFileSync(plain, 'utf8')).MINE, '1');
+  assert.equal(readEnvironmentVariables(ctx, 'development', PASSWORD).MINE, undefined);
+  assert.equal(syncOf(ctx), 'local-changes');
 });
