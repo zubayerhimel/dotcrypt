@@ -1,11 +1,11 @@
 {
-  "name": "dotenv-vault-cli",
+  "name": "dotcrypt",
   "version": "1.0.0",
   "description": "Securely sync multiple .env environments across machines via Git using AES-256-GCM encrypted files.",
   "type": "module",
   "main": "src/crypto.js",
   "bin": {
-    "dotenv-vault-cli": "bin/cli.js"
+    "dotcrypt": "bin/cli.js"
   },
   "files": [
     "bin/",

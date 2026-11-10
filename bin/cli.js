@@ -31,8 +31,8 @@ import { isUiBuilt, openBrowser, startUiServer } from '../src/server.js';
 const require = createRequire(import.meta.url);
 const pkg = require('../package.json');
 
-const PASSWORD_ENV = 'DOTENV_VAULT_PASSWORD';
-const NEW_PASSWORD_ENV = 'DOTENV_VAULT_NEW_PASSWORD';
+const PASSWORD_ENV = 'DOTCRYPT_PASSWORD';
+const NEW_PASSWORD_ENV = 'DOTCRYPT_NEW_PASSWORD';
 
 const log = {
   info: (msg) => console.log(msg),
@@ -229,9 +229,9 @@ async function initCommand(opts) {
   log.info('');
   log.info(chalk.bold('Next steps:'));
   log.info(`  1. Create your local env file, e.g. ${config.environments[config.defaultEnvironment].file}`);
-  log.info(`  2. dotenv-vault-cli encrypt -e ${config.defaultEnvironment}`);
+  log.info(`  2. dotcrypt encrypt -e ${config.defaultEnvironment}`);
   log.info(`  3. git add ${CONFIG_FILENAME} .gitignore *.enc && git commit`);
-  log.info(`  Or run ${chalk.cyan('dotenv-vault-cli ui')} for a visual dashboard.`);
+  log.info(`  Or run ${chalk.cyan('dotcrypt ui')} for a visual dashboard.`);
 }
 
 async function encryptCommand(opts) {
@@ -274,7 +274,7 @@ async function encryptCommand(opts) {
       throw new VaultError(err.message, {
         exitCode: 2,
         hint:
-          'Check the password. To change it use "dotenv-vault-cli rotate-key"; ' +
+          'Check the password. To change it use "dotcrypt rotate-key"; ' +
           'to discard the existing vault file and start over use --replace.',
       });
     }
@@ -379,7 +379,7 @@ async function diffCommand(opts) {
 async function uiCommand(opts) {
   if (!isUiBuilt()) {
     throw new VaultError('The dashboard has not been built yet.', {
-      hint: 'Run "npm run build:ui" in the dotenv-vault-cli package directory.',
+      hint: 'Run "npm run build:ui" in the dotcrypt package directory.',
     });
   }
   const timestamp = () => new Date().toLocaleTimeString();
@@ -415,7 +415,7 @@ function parsePort(value) {
 
 const program = new Command();
 program
-  .name('dotenv-vault-cli')
+  .name('dotcrypt')
   .description('Securely sync .env environments across machines via Git using AES-256-GCM encrypted files.')
   .version(pkg.version)
   .showHelpAfterError()

@@ -80,7 +80,7 @@ export class ApiError extends Error {
   }
 }
 
-const TOKEN_KEY = "dotenv-vault-token"
+const TOKEN_KEY = "dotcrypt-token"
 
 /** Moves the session token from the URL into sessionStorage so it does not linger in history. */
 function initToken(): string | null {

@@ -98,6 +98,7 @@ export function deriveKey(password, salt, params = DEFAULT_SCRYPT_PARAMS) {
 function buildAad(header) {
   return Buffer.from(
     JSON.stringify([
+      // Format identifier from the tool's original name. Changing it would make every existing vault undecryptable.
       'dotenv-vault-cli',
       header.version,
       header.algorithm,

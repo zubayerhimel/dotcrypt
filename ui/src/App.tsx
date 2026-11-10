@@ -273,7 +273,7 @@ export function App() {
             <Alert variant="destructive">
               <TriangleAlertIcon />
               <AlertTitle>Could not reach the vault server</AlertTitle>
-              <AlertDescription>{loadError.message}. Is `dotenv-vault-cli ui` still running?</AlertDescription>
+              <AlertDescription>{loadError.message}. Is `dotcrypt ui` still running?</AlertDescription>
             </Alert>
           ) : !status ? (
             <LoadingSkeleton />
@@ -342,7 +342,7 @@ function Header({
 }) {
   const { theme, setTheme } = useTheme()
   const isDark = theme === "dark" || (theme === "system" && window.matchMedia("(prefers-color-scheme: dark)").matches)
-  const title = status?.initialized ? status.vault.name : "dotenv-vault"
+  const title = status?.initialized ? status.vault.name : "dotcrypt"
 
   return (
     <header className="sticky top-0 z-10 border-b bg-background/80 backdrop-blur">
@@ -353,7 +353,7 @@ function Header({
         <div className="min-w-0 flex-1">
           <h1 className="truncate text-sm font-semibold">{title}</h1>
           <p className="truncate font-mono text-xs text-muted-foreground" title={status?.root}>
-            {status?.root ?? "dotenv-vault-cli dashboard"}
+            {status?.root ?? "dotcrypt dashboard"}
           </p>
         </div>
         {unlockedCount > 0 && (
@@ -428,7 +428,7 @@ function Dashboard({
         <Alert>
           <TriangleAlertIcon />
           <AlertTitle>Connection lost</AlertTitle>
-          <AlertDescription>Showing the last known state. Is `dotenv-vault-cli ui` still running?</AlertDescription>
+          <AlertDescription>Showing the last known state. Is `dotcrypt ui` still running?</AlertDescription>
         </Alert>
       )}
       {tracked.length > 0 && (
@@ -533,7 +533,7 @@ function SessionError() {
         </EmptyMedia>
         <EmptyTitle>Session token missing or expired</EmptyTitle>
         <EmptyDescription>
-          Open the exact URL printed by <code className="font-mono">dotenv-vault-cli ui</code>. Each run creates a new
+          Open the exact URL printed by <code className="font-mono">dotcrypt ui</code>. Each run creates a new
           token.
         </EmptyDescription>
       </EmptyHeader>

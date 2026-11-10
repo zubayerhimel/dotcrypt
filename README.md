@@ -1,4 +1,4 @@
-# dotenv-vault-cli
+# dotcrypt
 
 Securely sync multiple `.env` environments across machines **through your existing Git repository**.
 Plaintext env files stay local and git-ignored; only AES-256-GCM encrypted `.enc` files and a shared
@@ -14,14 +14,21 @@ Plaintext env files stay local and git-ignored; only AES-256-GCM encrypted `.enc
 
 ## Installation
 
+```bash
+npm install -g dotcrypt
+dotcrypt --help
+```
+
+### From source
+
 Requires Node.js **20.19+** (needed to build the dashboard; the CLI alone runs on 18.17+).
 
 ```bash
 git clone https://github.com/zubayerhimel/secretly.git
 cd secretly
 npm run setup       # installs CLI + dashboard dependencies and builds the dashboard
-npm link            # exposes the `dotenv-vault-cli` command globally
-dotenv-vault-cli --help
+npm link            # exposes the `dotcrypt` command globally
+dotcrypt --help
 ```
 
 `npm run setup` is the same as running these one by one:
@@ -37,14 +44,14 @@ Re-run `npm run build:ui` after pulling changes to the dashboard code.
 > **Windows PowerShell:** if you get "running scripts is disabled on this system", use `npm.cmd`
 > instead of `npm` (e.g. `npm.cmd run setup`, `npm.cmd link`), or run the commands from Command Prompt.
 
-To uninstall the global link: `npm unlink -g dotenv-vault-cli`.
+To uninstall the global link: `npm unlink -g dotcrypt`.
 
 ## Quick start
 
 ```bash
 cd path/to/your-project
-dotenv-vault-cli init        # creates .env-vault.json and updates .gitignore
-dotenv-vault-cli ui          # opens the dashboard in your browser
+dotcrypt init        # creates .env-vault.json and updates .gitignore
+dotcrypt ui          # opens the dashboard in your browser
 ```
 
 Prefer the terminal? Everything in the dashboard is also available as a CLI command (see below).
@@ -69,7 +76,7 @@ Passwords are resolved in this order:
 
 1. CLI flag (`-p`, `-o`, `-n`) — works, but prints a warning because flags leak into shell
    history and process listings.
-2. Environment variable — `DOTENV_VAULT_PASSWORD` (and `DOTENV_VAULT_NEW_PASSWORD` for the new
+2. Environment variable — `DOTCRYPT_PASSWORD` (and `DOTCRYPT_NEW_PASSWORD` for the new
    password in `rotate-key`). Recommended for CI.
 3. Interactive masked prompt (recommended for humans). New passwords must be at least 12
    characters and are asked twice.
@@ -132,10 +139,10 @@ Custom plaintext paths that the default `.env` / `.env.*` rules don't cover are 
 **Project owner (once):**
 
 ```bash
-dotenv-vault-cli init                     # creates .env-vault.json, updates .gitignore
+dotcrypt init                     # creates .env-vault.json, updates .gitignore
 # create .env.development, .env.staging, ...
-dotenv-vault-cli encrypt -e development   # choose a strong password
-dotenv-vault-cli encrypt -e production    # use a *different* password per environment
+dotcrypt encrypt -e development   # choose a strong password
+dotcrypt encrypt -e production    # use a *different* password per environment
 git add .env-vault.json .gitignore *.enc
 git commit -m "Add encrypted environments"
 ```
@@ -146,23 +153,23 @@ Share each environment's password **out of band** (password manager, not chat or
 
 ```bash
 git pull
-dotenv-vault-cli decrypt -e development
+dotcrypt decrypt -e development
 ```
 
 **Changing a secret:**
 
 ```bash
 git pull                                  # always start from the latest vault
-dotenv-vault-cli diff -e development       # see what differs before acting
+dotcrypt diff -e development       # see what differs before acting
 # edit .env.development
-dotenv-vault-cli encrypt -e development
+dotcrypt encrypt -e development
 git add .env.development.enc && git commit -m "Update dev env" && git push
 ```
 
 **Someone leaves the team / password leaked:**
 
 ```bash
-dotenv-vault-cli rotate-key -e production
+dotcrypt rotate-key -e production
 git commit -am "Rotate production vault password" && git push
 ```
 
@@ -177,7 +184,7 @@ plaintext file, and running `encrypt` again.
 **CI usage:**
 
 ```bash
-DOTENV_VAULT_PASSWORD="$VAULT_PASSWORD_PRODUCTION" dotenv-vault-cli decrypt -e production --force
+DOTCRYPT_PASSWORD="$VAULT_PASSWORD_PRODUCTION" dotcrypt decrypt -e production --force
 ```
 
 ## Security architecture
@@ -264,9 +271,9 @@ Each `.enc` file is a JSON envelope:
 3. Run:
 
    ```bash
-   dotenv-vault-cli ui                      # random free port, opens your browser
-   dotenv-vault-cli ui --port 4600          # fixed port
-   dotenv-vault-cli ui --no-open            # just print the URL
+   dotcrypt ui                      # random free port, opens your browser
+   dotcrypt ui --port 4600          # fixed port
+   dotcrypt ui --no-open            # just print the URL
    ```
 
 4. The terminal prints a URL like `http://127.0.0.1:53412/?token=3f9c…`. Your browser opens it
@@ -314,7 +321,7 @@ show up automatically.
 
 ```bash
 # terminal 1, inside any project with a vault
-dotenv-vault-cli ui --port 4600 --no-open        # note the token it prints
+dotcrypt ui --port 4600 --no-open        # note the token it prints
 # terminal 2, in this repository
 VAULT_API_PORT=4600 npm run dev:ui               # Vite on http://localhost:5173, /api is proxied
 # open http://localhost:5173/?token=<token>

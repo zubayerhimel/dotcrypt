@@ -62,7 +62,7 @@ export function loadEnvelope(ctx, env) {
   if (!fileExists(env.encPath)) {
     throw new VaultError(`Encrypted file ${env.encryptedFile} not found for environment "${env.name}".`, {
       code: 'NOT_FOUND',
-      hint: `Run "dotenv-vault-cli encrypt -e ${env.name}" first, or pull the latest changes from Git.`,
+      hint: `Run "dotcrypt encrypt -e ${env.name}" first, or pull the latest changes from Git.`,
     });
   }
   try {

@@ -5,7 +5,7 @@ import { execFileSync } from 'node:child_process';
 import dotenv from 'dotenv';
 
 export const MAX_FILE_SIZE = 5 * 1024 * 1024;
-export const GITIGNORE_HEADER = '# dotenv-vault-cli: never commit plaintext environment files';
+export const GITIGNORE_HEADER = '# dotcrypt: never commit plaintext environment files';
 export const BASE_GITIGNORE_RULES = Object.freeze(['.env', '.env.*', '!.env.*.enc']);
 
 export class VaultError extends Error {

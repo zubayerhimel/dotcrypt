@@ -262,7 +262,7 @@ export function startUiServer({ cwd = process.cwd(), port = 0, onLog = () => {} 
     if (!isWithin(UI_DIST_DIR, file)) return send(res, 404, 'Not found');
     if (!fs.existsSync(file) || !fs.statSync(file).isFile()) file = path.join(UI_DIST_DIR, 'index.html');
     if (!fs.existsSync(file)) {
-      return send(res, 503, 'Dashboard assets are not built. Run "npm run build:ui" in the dotenv-vault-cli package.', {
+      return send(res, 503, 'Dashboard assets are not built. Run "npm run build:ui" in the dotcrypt package.', {
         'Content-Type': 'text/plain; charset=utf-8',
       });
     }

@@ -4,7 +4,7 @@ import react from "@vitejs/plugin-react"
 import { defineConfig } from "vite"
 
 // https://vite.dev/config/
-// In dev, run `dotenv-vault-cli ui --port 4600 --no-open` in a project, then
+// In dev, run `dotcrypt ui --port 4600 --no-open` in a project, then
 // `VAULT_API_PORT=4600 npm run dev` and open http://localhost:5173/?token=<token>.
 const apiPort = process.env.VAULT_API_PORT ?? "4600"
 

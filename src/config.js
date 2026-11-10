@@ -126,7 +126,7 @@ export function loadConfig(startDir = process.cwd()) {
   if (!root) {
     throw new VaultError(`No ${CONFIG_FILENAME} found in ${path.resolve(startDir)} or any parent directory.`, {
       code: 'NO_CONFIG',
-      hint: 'Run "dotenv-vault-cli init" at the root of your project.',
+      hint: 'Run "dotcrypt init" at the root of your project.',
     });
   }
   const configPath = path.join(root, CONFIG_FILENAME);

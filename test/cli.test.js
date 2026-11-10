@@ -14,7 +14,7 @@ function cli(cwd, args, password) {
     cwd,
     encoding: 'utf8',
     stdio: ['ignore', 'pipe', 'pipe'],
-    env: { ...process.env, DOTENV_VAULT_PASSWORD: password, NO_COLOR: '1' },
+    env: { ...process.env, DOTCRYPT_PASSWORD: password, NO_COLOR: '1' },
   });
 }
 
