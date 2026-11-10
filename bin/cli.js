@@ -32,6 +32,7 @@ import {
   verifyPassword,
 } from '../src/vault.js';
 import { assertValidKey } from '../src/envfile.js';
+import { HOOKS, incomingCheck, installHooks, preCommitCheck, uninstallHooks } from '../src/hooks.js';
 import { isUiBuilt, openBrowser, startUiServer } from '../src/server.js';
 
 const require = createRequire(import.meta.url);
@@ -570,6 +571,73 @@ async function runCommand(command, opts) {
   process.exitCode = code ?? 128 + (os.constants.signals[signal] ?? 0);
 }
 
+const HOOK_ACTIONS = {
+  created: 'installed',
+  added: 'added to your existing hook',
+  updated: 'updated',
+  unchanged: 'already installed',
+  removed: 'removed',
+  cleaned: 'removed (your other hook commands were kept)',
+  'not-installed': 'not installed',
+};
+
+function printHookResults(ctx, results) {
+  for (const result of results) {
+    const where = chalk.dim(`(${path.relative(ctx.root, result.file) || result.file})`);
+    if (result.action === 'skipped') log.warn(`${result.hook}: skipped, ${result.reason} ${where}`);
+    else log.success(`${result.hook}: ${HOOK_ACTIONS[result.action]} ${where}`);
+  }
+}
+
+function hooksInstallCommand() {
+  const ctx = loadConfig();
+  printHookResults(ctx, installHooks(ctx));
+  log.info('');
+  log.info('From now on:');
+  log.info('  • commits that include a plaintext .env file are blocked');
+  log.info('  • committing reminds you about changes you have not shared yet');
+  log.info('  • git pull / checkout tells you when teammates changed secrets');
+  log.dim('Hooks are not shared through Git: each teammate runs "dotcrypt hooks install" once.');
+}
+
+function hooksUninstallCommand() {
+  const ctx = loadConfig();
+  printHookResults(ctx, uninstallHooks(ctx));
+}
+
+/** Entry point called by the installed Git hooks. Never fails except to block plaintext commits. */
+function hookCommand(name, args, opts) {
+  let ctx;
+  try {
+    ctx = loadConfig(opts.project ? path.resolve(opts.project) : process.cwd());
+  } catch {
+    return;
+  }
+  const say = (msg) => console.error(`${chalk.cyan('dotcrypt')} ${msg}`);
+
+  if (name === 'pre-commit') {
+    const { blocked, unshared } = preCommitCheck(ctx);
+    for (const envName of unshared) {
+      say(chalk.yellow(`${envName} has changes you have not shared. Run: ${nextStep({ name: envName, sync: 'local-changes' })}`));
+    }
+    if (blocked.length) {
+      const files = blocked.map(sanitizeForTerminal);
+      say(chalk.red('blocked this commit: it includes plaintext secrets.'));
+      for (const file of files) console.error(`    ${file}`);
+      console.error(`  Unstage them: git rm --cached ${files.map((f) => JSON.stringify(f)).join(' ')}`);
+      console.error('  Commit the encrypted .enc files instead. To commit anyway: git commit --no-verify');
+      process.exitCode = 1;
+    }
+    return;
+  }
+
+  if (name === 'post-checkout' && args[2] === '0') return;
+  for (const env of incomingCheck(ctx)) {
+    const what = env.sync === 'conflict' ? 'teammates changed secrets you also edited in' : 'new secrets from your team in';
+    say(`${what} ${env.name}. Run: ${nextStep(env)}`);
+  }
+}
+
 async function uiCommand(opts) {
   if (!isUiBuilt()) {
     throw new VaultError('The dashboard has not been built yet.', {
@@ -709,6 +777,19 @@ program
     `\nExamples:\n  $ dotcrypt run -e production -- npm start\n  $ ${PASSWORD_ENV}=... dotcrypt run -e staging -- node server.js`,
   )
   .action(runCommand);
+
+const hooks = program
+  .command('hooks')
+  .description('install Git hooks that block plaintext commits and remind you to share or download changes');
+hooks.command('install').description(`add dotcrypt to the ${HOOKS.join(', ')} hooks`).action(hooksInstallCommand);
+hooks.command('uninstall').description('remove dotcrypt from the Git hooks').action(hooksUninstallCommand);
+
+program
+  .command('hook', { hidden: true })
+  .argument('<name>', 'hook name')
+  .argument('[args...]', 'arguments Git passed to the hook')
+  .option('--project <dir>', 'project directory, relative to the repository root')
+  .action(hookCommand);
 
 program
   .command('ui')

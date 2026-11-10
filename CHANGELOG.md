@@ -13,6 +13,8 @@ All notable changes to this project are documented here. The format is based on
 - `set`, `get` and `unset` commands to change one variable without editing files by hand.
   `set` and `unset` update the vault and your local file and keep comments and formatting.
   `dotcrypt set KEY` asks for the value at a hidden prompt, or reads it from stdin.
+- `hooks install` / `hooks uninstall`: Git hooks that block commits with plaintext env files, remind
+  you about unshared changes, and announce teammates' changes after `git pull` or a branch switch.
 
 ## [1.1.0] - 2026-11-10
 

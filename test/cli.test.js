@@ -98,3 +98,52 @@ test('set, get and unset edit single variables in the vault', () => {
   assert.doesNotMatch(fs.readFileSync(path.join(root, '.env.development'), 'utf8'), /^B=/m);
   assert.equal(cli(root, ['set', '1BAD=x'], PASSWORD).status, 1);
 });
+
+test('hooks block plaintext commits, keep existing hooks and announce incoming changes', () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'dotcrypt-cli-'));
+  const binDir = fs.mkdtempSync(path.join(os.tmpdir(), 'dotcrypt-bin-'));
+  fs.writeFileSync(path.join(binDir, 'dotcrypt'), `#!/bin/sh\nexec "${process.execPath}" "${CLI}" "$@"\n`, { mode: 0o755 });
+  const env = { PATH: `${binDir}${path.delimiter}${process.env.PATH}` };
+  const git = (...args) =>
+    spawnSync('git', ['-c', 'user.name=t', '-c', 'user.email=t@t', '-c', 'commit.gpgsign=false', ...args], {
+      cwd: root,
+      encoding: 'utf8',
+      env: { ...process.env, NO_COLOR: '1', ...env },
+    });
+
+  git('init', '-q');
+  const preCommit = path.join(root, '.git', 'hooks', 'pre-commit');
+  fs.writeFileSync(preCommit, '#!/bin/sh\necho existing-hook-ran\n', { mode: 0o755 });
+  assert.equal(cli(root, ['init', '-y', '--envs', 'development'], PASSWORD).status, 0);
+  fs.writeFileSync(path.join(root, '.env.development'), 'A=1\n');
+  assert.equal(cli(root, ['encrypt'], PASSWORD).status, 0);
+  assert.equal(cli(root, ['hooks', 'install'], PASSWORD).status, 0);
+  assert.equal(cli(root, ['hooks', 'install'], PASSWORD).status, 0);
+  assert.equal(fs.readFileSync(preCommit, 'utf8').match(/>>> dotcrypt >>>/g).length, 1);
+
+  git('add', '.gitignore', '.dotcrypt.json', '.env.development.enc');
+  git('add', '-f', '.env.development');
+  const blocked = git('commit', '-m', 'oops');
+  assert.notEqual(blocked.status, 0);
+  assert.match(blocked.stderr, /blocked this commit[\s\S]*\.env\.development/);
+
+  git('rm', '-q', '--cached', '.env.development');
+  fs.appendFileSync(path.join(root, '.env.development'), 'B=2\n');
+  const ok = git('commit', '-m', 'share');
+  assert.equal(ok.status, 0, ok.stderr);
+  assert.match(ok.stdout + ok.stderr, /existing-hook-ran/);
+  assert.match(ok.stderr, /development has changes you have not shared/);
+
+  // Another branch changes the vault; switching to it announces the incoming change.
+  assert.equal(cli(root, ['encrypt', '--force'], PASSWORD).status, 0);
+  git('checkout', '-q', '-b', 'teammate');
+  git('commit', '-qam', 'teammate change');
+  git('checkout', '-q', '-');
+  assert.equal(cli(root, ['decrypt', '--force'], PASSWORD).status, 0);
+  const back = git('checkout', 'teammate');
+  assert.match(back.stderr, /new secrets from your team in development\. Run: dotcrypt decrypt -e development/);
+
+  assert.equal(cli(root, ['hooks', 'uninstall'], PASSWORD).status, 0);
+  assert.equal(fs.readFileSync(preCommit, 'utf8'), '#!/bin/sh\necho existing-hook-ran\n');
+  assert.equal(fs.existsSync(path.join(root, '.git', 'hooks', 'post-merge')), false);
+});

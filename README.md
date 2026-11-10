@@ -70,6 +70,7 @@ Prefer the terminal? Everything in the dashboard is also available as a CLI comm
 | `get <KEY> [-e env] [-p password]` | Print one variable from the vault. Exits 1 if it is not set. |
 | `unset <KEY>... [-e env] [-p password]` | Remove variables from the vault and your local file. |
 | `run [-e env] [-p password] [--override] -- <command>` | Run a command with the decrypted variables set. Nothing is written to disk. |
+| `hooks install` / `hooks uninstall` | Add Git hooks that block plaintext commits and tell you when to share or download changes. |
 | `ui [--port n] [--no-open]` | Open the local web dashboard (see below). |
 
 If `-e` is omitted you are prompted to pick an environment (non-interactive runs fall back to
@@ -182,6 +183,21 @@ each card, and enter the password you gave them.
 **Review** to see which variable names differ, then choose **Keep mine and share it** or **Use
 team's version**. If you need parts of both, copy the missing variables into your file first,
 then keep yours.
+
+### Git hooks (recommended)
+
+Run `dotcrypt hooks install` once in your clone. It adds a few lines to the `pre-commit`,
+`post-merge` and `post-checkout` hooks (existing hooks are kept, `core.hooksPath` is respected):
+
+- **Before a commit:** the commit is blocked if it includes a plaintext env file such as `.env`
+  or `.env.local`. You also get a reminder when you have changes you have not shared yet.
+- **After `git pull` or a branch switch:** you are told when teammates changed secrets, and
+  which command gets them.
+
+Hooks are not shared through Git, so each teammate runs `dotcrypt hooks install` once. If
+dotcrypt is not installed, the hooks do nothing. `git commit --no-verify` skips the check.
+`dotcrypt hooks uninstall` removes them. With husky, add `npx dotcrypt hook pre-commit` to
+`.husky/pre-commit` (and `npx dotcrypt hook post-merge` to `.husky/post-merge`) instead.
 
 ### How dotcrypt knows what changed
 
