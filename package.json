@@ -12,14 +12,18 @@
     "src/",
     "ui/dist/",
     "README.md",
-    "LICENSE"
+    "LICENSE",
+    "CHANGELOG.md"
   ],
   "scripts": {
     "test": "node --test",
     "setup": "npm install && npm --prefix ui install && npm run build:ui",
     "build:ui": "npm --prefix ui run build",
     "dev:ui": "npm --prefix ui run dev",
-    "prepack": "npm run build:ui"
+    "prepack": "npm run build:ui",
+    "prepublishOnly": "npm test",
+    "preversion": "npm test",
+    "postversion": "git push --follow-tags"
   },
   "keywords": [
     "dotenv",
@@ -28,7 +32,9 @@
     "vault",
     "encryption",
     "aes-256-gcm",
-    "cli"
+    "cli",
+    "git",
+    "dotfiles"
   ],
   "license": "MIT",
   "repository": {
@@ -47,5 +53,9 @@
     "commander": "^12.1.0",
     "dotenv": "^16.4.5",
     "prompts": "^2.4.2"
+  },
+  "author": "zubayerhimel <zhimel007@gmail.com>",
+  "publishConfig": {
+    "access": "public"
   }
 }

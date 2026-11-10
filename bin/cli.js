@@ -417,7 +417,7 @@ const program = new Command();
 program
   .name('dotcrypt')
   .description('Securely sync .env environments across machines via Git using AES-256-GCM encrypted files.')
-  .version(pkg.version)
+  .version(pkg.version, '-v, --version', 'output the version number')
   .showHelpAfterError()
   .addHelpText(
     'after',
