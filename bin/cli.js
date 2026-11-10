@@ -1,5 +1,7 @@
 #!/usr/bin/env node
 import fs from 'node:fs';
+import os from 'node:os';
+import { spawn } from 'node:child_process';
 import path from 'node:path';
 import { createRequire } from 'node:module';
 import { Command, InvalidArgumentError, Option } from 'commander';
@@ -24,6 +26,7 @@ import {
   inspectVault,
   loadEnvelope,
   newPasswordProblem,
+  readEnvironmentVariables,
   rotateEnvironmentKey,
   verifyPassword,
 } from '../src/vault.js';
@@ -438,6 +441,59 @@ async function diffCommand(opts) {
   if (opts.exitCode) process.exitCode = 1;
 }
 
+async function runCommand(command, opts) {
+  const ctx = loadConfig();
+  const env = await pickEnvironment(ctx, opts.env);
+  loadEnvelope(ctx, env);
+  const password = await resolvePassword({
+    flagValue: opts.password,
+    flagName: '--password',
+    envVar: PASSWORD_ENV,
+    message: `Vault password for "${env.name}"`,
+  });
+  const vars = readEnvironmentVariables(ctx, env.name, password);
+
+  const childEnv = { ...process.env };
+  // The child gets the secrets, never the key that unlocks them.
+  delete childEnv[PASSWORD_ENV];
+  delete childEnv[NEW_PASSWORD_ENV];
+  let injected = 0;
+  for (const [key, value] of Object.entries(vars)) {
+    if (!opts.override && Object.hasOwn(childEnv, key)) continue;
+    childEnv[key] = value;
+    injected += 1;
+  }
+  const skipped = Object.keys(vars).length - injected;
+  if (!opts.quiet) {
+    console.error(
+      chalk.dim(
+        `dotcrypt: injecting ${injected} variable${injected === 1 ? '' : 's'} from ${env.encryptedFile}` +
+          (skipped ? ` (${skipped} already set in your shell; use --override to replace them)` : ''),
+      ),
+    );
+  }
+
+  const [bin, ...args] = command;
+  const child = spawn(bin, args, { stdio: 'inherit', env: childEnv, shell: process.platform === 'win32' });
+  const forward = (signal) => child.kill(signal);
+  const signals = ['SIGINT', 'SIGTERM', 'SIGHUP'];
+  for (const signal of signals) process.on(signal, forward);
+
+  const { code, signal } = await new Promise((resolve, reject) => {
+    child.once('error', (err) =>
+      reject(
+        err.code === 'ENOENT'
+          ? new VaultError(`Command not found: ${bin}`, { exitCode: 127 })
+          : new VaultError(`Could not start ${bin}: ${err.message}`),
+      ),
+    );
+    child.once('exit', (exitCode, exitSignal) => resolve({ code: exitCode, signal: exitSignal }));
+  }).finally(() => {
+    for (const s of signals) process.off(s, forward);
+  });
+  process.exitCode = code ?? 128 + (os.constants.signals[signal] ?? 0);
+}
+
 async function uiCommand(opts) {
   if (!isUiBuilt()) {
     throw new VaultError('The dashboard has not been built yet.', {
@@ -480,6 +536,7 @@ program
   .name('dotcrypt')
   .description('Securely sync .env environments across machines via Git using AES-256-GCM encrypted files.')
   .version(pkg.version, '-v, --version', 'output the version number')
+  .enablePositionalOptions()
   .showHelpAfterError()
   .addHelpText(
     'after',
@@ -533,6 +590,21 @@ program
   .option('-p, --password <password>', 'vault password (prompted if omitted)')
   .option('--exit-code', 'exit with status 1 when differences are found')
   .action(diffCommand);
+
+program
+  .command('run')
+  .description('run a command with the decrypted variables in its environment (nothing is written to disk)')
+  .argument('<command...>', 'command to run, e.g. -- npm start')
+  .option('-e, --env <name>', 'environment name')
+  .option('-p, --password <password>', 'vault password (prompted if omitted)')
+  .option('--override', 'let vault values replace variables already set in your shell')
+  .option('-q, --quiet', 'do not print the injection summary')
+  .passThroughOptions()
+  .addHelpText(
+    'after',
+    `\nExamples:\n  $ dotcrypt run -e production -- npm start\n  $ ${PASSWORD_ENV}=... dotcrypt run -e staging -- node server.js`,
+  )
+  .action(runCommand);
 
 program
   .command('ui')

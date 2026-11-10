@@ -6,6 +6,11 @@ All notable changes to this project are documented here. The format is based on
 
 ## [Unreleased]
 
+### Added
+
+- `run` command: `dotcrypt run -e production -- npm start` decrypts in memory and starts the command
+  with the variables set. Nothing is written to disk, and the vault password is not passed on.
+
 ## [1.1.0] - 2026-11-10
 
 ### Added

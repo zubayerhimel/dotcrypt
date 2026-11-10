@@ -66,6 +66,7 @@ Prefer the terminal? Everything in the dashboard is also available as a CLI comm
 | `decrypt [-e env] [-p password] [-f]` | Decrypt the `.enc` file into the mapped local file. |
 | `rotate-key [-e env] [-o old] [-n new]` | Re-encrypt with a new password, a fresh salt and a fresh IV. |
 | `diff [-e env] [-p password] [--exit-code]` | Show **key names** that were added / removed / changed. Values are never printed. |
+| `run [-e env] [-p password] [--override] -- <command>` | Run a command with the decrypted variables set. Nothing is written to disk. |
 | `ui [--port n] [--no-open]` | Open the local web dashboard (see below). |
 
 If `-e` is omitted you are prompted to pick an environment (non-interactive runs fall back to
@@ -209,11 +210,16 @@ git commit -am "Rotate production vault password" && git push
 one side (`git checkout --theirs .env.x.enc`), running `decrypt`, re-applying your changes to the
 plaintext file, and running `encrypt` again.
 
-**CI usage:**
+**CI, Docker and servers:** use `run` so the plaintext never touches the disk.
 
 ```bash
-DOTCRYPT_PASSWORD="$VAULT_PASSWORD_PRODUCTION" dotcrypt decrypt -e production --force
+DOTCRYPT_PASSWORD="$VAULT_PASSWORD_PRODUCTION" dotcrypt run -e production -- npm start
 ```
+
+`run` decrypts in memory, starts the command with the variables set, and passes through its exit
+code and signals. Variables already set in the shell win unless you pass `--override`. The
+password variables (`DOTCRYPT_PASSWORD`, `DOTCRYPT_NEW_PASSWORD`) are removed from the command's
+environment. If a tool really needs a file, `decrypt --force` still works.
 
 ## Security architecture
 

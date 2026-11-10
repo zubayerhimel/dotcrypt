@@ -340,6 +340,18 @@ export function verifyPassword(ctx, name, password) {
   decryptOrFail(loadEnvelope(ctx, env), password, env).fill(0);
 }
 
+/** Decrypts an environment in memory and returns its variables. Nothing is written to disk. */
+export function readEnvironmentVariables(ctx, name, password) {
+  assertPasswordProvided(password);
+  const env = resolveEnvironment(ctx, name);
+  const plaintext = decryptOrFail(loadEnvelope(ctx, env), password, env);
+  try {
+    return parseEnv(plaintext);
+  } finally {
+    plaintext.fill(0);
+  }
+}
+
 /**
  * Key-level comparison of vault vs local. Returns key names only.
  * `identical` is true only when both files are byte-for-byte equal (comments and formatting included).

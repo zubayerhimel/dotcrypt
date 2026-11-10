@@ -9,12 +9,12 @@ import { fileURLToPath } from 'node:url';
 const CLI = fileURLToPath(new URL('../bin/cli.js', import.meta.url));
 const PASSWORD = 'correct horse battery';
 
-function cli(cwd, args, password) {
+function cli(cwd, args, password, extraEnv = {}) {
   return spawnSync(process.execPath, [CLI, ...args], {
     cwd,
     encoding: 'utf8',
     stdio: ['ignore', 'pipe', 'pipe'],
-    env: { ...process.env, DOTCRYPT_PASSWORD: password, NO_COLOR: '1' },
+    env: { ...process.env, DOTCRYPT_PASSWORD: password, NO_COLOR: '1', ...extraEnv },
   });
 }
 
@@ -44,4 +44,28 @@ test('init rejects invalid environment names with a clear message', () => {
   assert.equal(res.status, 1);
   assert.match(res.stderr, /Invalid environment name\(s\): "my env"/);
   assert.equal(fs.existsSync(path.join(root, '.dotcrypt.json')), false);
+});
+
+test('run injects vault variables into the command without writing plaintext or leaking the password', () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'dotcrypt-cli-'));
+  assert.equal(cli(root, ['init', '-y', '--envs', 'development'], PASSWORD).status, 0);
+  const plain = path.join(root, '.env.development');
+  fs.writeFileSync(plain, 'A=from-vault\nB=vault-b\n');
+  assert.equal(cli(root, ['encrypt'], PASSWORD).status, 0);
+  fs.rmSync(plain);
+
+  const script = 'process.stdout.write([process.env.A, process.env.B, process.env.DOTCRYPT_PASSWORD ?? "none"].join("|"))';
+  const res = cli(root, ['run', '--', process.execPath, '-e', script], PASSWORD, { B: 'from-shell' });
+  assert.equal(res.status, 0, res.stderr);
+  assert.equal(res.stdout, 'from-vault|from-shell|none');
+  assert.match(res.stderr, /1 already set in your shell/);
+  assert.equal(fs.existsSync(plain), false);
+
+  const overridden = cli(root, ['run', '--override', '-q', '--', process.execPath, '-e', script], PASSWORD, { B: 'x' });
+  assert.equal(overridden.stdout, 'from-vault|vault-b|none');
+  assert.equal(overridden.stderr, '');
+
+  assert.equal(cli(root, ['run', process.execPath, '-e', 'process.exit(7)'], PASSWORD).status, 7);
+  assert.equal(cli(root, ['run', 'dotcrypt-no-such-command'], PASSWORD).status, 127);
+  assert.equal(cli(root, ['run', process.execPath, '-e', '1'], 'wrong password!!').status, 2);
 });
