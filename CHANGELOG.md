@@ -6,6 +6,10 @@ All notable changes to this project are documented here. The format is based on
 
 ## [Unreleased]
 
+### Changed
+
+- README rewritten for package users; local development instructions moved to `DEVELOPMENT.md`.
+
 ### Added
 
 - `run` command: `dotcrypt run -e production -- npm start` decrypts in memory and starts the command

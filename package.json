@@ -11,6 +11,7 @@
     "bin/",
     "src/",
     "ui/dist/",
+    "!ui/README.md",
     "README.md",
     "LICENSE",
     "CHANGELOG.md"

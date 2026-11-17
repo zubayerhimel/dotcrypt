@@ -1,117 +1,302 @@
 # dotcrypt
 
-Securely sync multiple `.env` environments across machines **through your existing Git repository**.
-Plaintext env files stay local and git-ignored; only AES-256-GCM encrypted `.enc` files and a shared
-`.dotcrypt.json` configuration are committed.
+Keep your `.env` files in sync across machines and teammates **using the Git repository you
+already have**. Your plaintext `.env` files stay on your machine; only AES-256-GCM encrypted
+`.enc` copies are committed and shared.
 
 ```
 .dotcrypt.json             <- committed: environments + file mappings (no secrets)
 .env.development           <- local only (git-ignored)
-.env.development.enc       <- committed: encrypted with AES-256-GCM
+.env.development.enc       <- committed: encrypted
 .env.production            <- local only (git-ignored)
-.env.production.enc        <- committed
+.env.production.enc        <- committed: encrypted
 ```
+
+- One password per environment (development, staging, production, ...).
+- No server, no account, no extra service: secrets travel through `git push` / `git pull`.
+- Works from the terminal or from a local web dashboard (`dotcrypt ui`).
+
+## Contents
+
+- [Installation](#installation)
+- [Quick start](#quick-start)
+- [Everyday use](#everyday-use)
+- [Commands](#commands)
+- [Passwords](#passwords)
+- [CI, Docker and servers](#ci-docker-and-servers)
+- [Web dashboard](#web-dashboard)
+- [Git hooks](#git-hooks)
+- [Configuration (`.dotcrypt.json`)](#configuration-dotcryptjson)
+- [Troubleshooting](#troubleshooting)
+- [Security](#security)
 
 ## Installation
 
+Requires **Node.js 18.17 or newer**.
+
 ```bash
 npm install -g dotcrypt
-dotcrypt --help
+dotcrypt --version
 ```
 
-### From source
-
-Requires Node.js **20.19+** (needed to build the dashboard; the CLI alone runs on 18.17+).
+Or run it without installing:
 
 ```bash
-git clone https://github.com/zubayerhimel/dotcrypt.git
-cd dotcrypt
-npm run setup       # installs CLI + dashboard dependencies and builds the dashboard
-npm link            # exposes the `dotcrypt` command globally
-dotcrypt --help
+npx dotcrypt --help
 ```
 
-`npm run setup` is the same as running these one by one:
-
-```bash
-npm install                 # CLI dependencies
-npm --prefix ui install     # dashboard dependencies
-npm run build:ui            # builds the dashboard into ui/dist
-```
-
-Re-run `npm run build:ui` after pulling changes to the dashboard code.
-
-> **Windows PowerShell:** if you get "running scripts is disabled on this system", use `npm.cmd`
-> instead of `npm` (e.g. `npm.cmd run setup`, `npm.cmd link`), or run the commands from Command Prompt.
-
-To uninstall the global link: `npm unlink -g dotcrypt`.
+To uninstall: `npm uninstall -g dotcrypt`.
 
 ## Quick start
 
+**First person on the project (once):**
+
 ```bash
 cd path/to/your-project
-dotcrypt init        # creates .dotcrypt.json and updates .gitignore
-dotcrypt ui          # opens the dashboard in your browser
+dotcrypt init                    # creates .dotcrypt.json and updates .gitignore
+# create or keep your .env.development, .env.production, ... files as usual
+dotcrypt encrypt -e development  # choose a password; writes .env.development.enc
+git add .dotcrypt.json .gitignore .env.development.enc
+git commit -m "Add encrypted env files" && git push
 ```
 
-Prefer the terminal? Everything in the dashboard is also available as a CLI command (see below).
+Share the password with your teammates privately (a password manager, not chat or the repo).
+
+**Teammates:**
+
+```bash
+git clone <your-repo> && cd <your-repo>
+dotcrypt decrypt -e development  # enter the password; writes .env.development
+```
+
+Prefer clicking? Run `dotcrypt ui` and follow the cards on the dashboard. Everything in the
+dashboard is also available as a CLI command.
+
+## Everyday use
+
+Not sure what to do? Run `dotcrypt status`. It tells you, per environment, what changed and the
+next command to run. It never needs a password.
+
+| Status | Meaning | Next step |
+| --- | --- | --- |
+| Up to date | Nothing changed since your last sync. | Nothing. |
+| You have changes your team does not have | Your local `.env` file changed. | `dotcrypt encrypt`, then commit and push the `.enc` file. |
+| New changes from your team | The `.enc` file changed (e.g. after `git pull`). | `dotcrypt decrypt`. |
+| Changed both locally and by your team | Both changed. | `dotcrypt diff` to see which variables differ, then choose a side. |
+| Not shared yet | You have a local file but no `.enc` file. | `dotcrypt encrypt`. |
+| Shared by your team, not on this machine yet | There is an `.enc` file but no local file. | `dotcrypt decrypt`. |
+| Not checked yet on this machine | First run on this clone. | `dotcrypt diff` once with the password. |
+
+`status` prints the exact command for each step.
+
+**You added or changed a variable**
+
+```bash
+# edit .env.development in your editor, then:
+dotcrypt encrypt -e development
+git add .env.development.enc && git commit -m "Update development secrets" && git push
+```
+
+Or change a single variable without opening the file:
+
+```bash
+dotcrypt set API_URL=https://api.example.com -e development
+dotcrypt set STRIPE_KEY -e production     # asks for the value at a hidden prompt
+dotcrypt unset OLD_FLAG -e development
+```
+
+`set` and `unset` update both the `.enc` file and your local file. Commit and push the `.enc`
+file afterwards.
+
+**A teammate changed something**
+
+```bash
+git pull
+dotcrypt decrypt -e development
+```
+
+**Both of you changed the same environment**
+
+1. `dotcrypt diff -e <env>` shows which variable names were added, removed or changed (values are
+   never printed).
+2. Keep yours: copy anything you need from the team version into your file, then
+   `dotcrypt encrypt -e <env>`.
+3. Or take the team's: `dotcrypt decrypt -e <env>` (you are asked before anything is overwritten).
+
+**Find variables missing in some environments**
+
+```bash
+dotcrypt check                      # compares all environments
+dotcrypt check -e staging,production
+```
+
+Lists variable names that exist in one environment but not another. Exits with code 1 if
+something is missing, so it can run in CI.
+
+**Someone leaves the team / a password leaked**
+
+```bash
+dotcrypt rotate-key -e production
+git commit -am "Rotate production vault password" && git push
+```
+
+> ⚠️ Rotating the password does **not** revoke secrets. Anyone with the old password can still
+> decrypt old versions of the `.enc` file from Git history. After a departure or leak, also
+> rotate the **underlying secrets** (API keys, database passwords), then `dotcrypt encrypt`
+> again.
+
+**Merge conflicts in `.enc` files**
+
+Encrypted files can't be merged line by line. Take one side
+(`git checkout --theirs .env.production.enc`), run `dotcrypt decrypt`, re-apply your changes to
+the `.env` file, then run `dotcrypt encrypt`.
 
 ## Commands
 
 | Command | Description |
 | --- | --- |
-| `status` | Show what changed for each environment and what to do next. No password needed. |
-| `init [-n name] [--envs a,b,c] [-d env] [-y] [-f]` | Create `.dotcrypt.json` and add ignore rules for plaintext env files to `.gitignore`. |
-| `encrypt [-e env] [-p password] [-f] [--replace]` | Encrypt the mapped local file (e.g. `.env.staging`) into its `.enc` file. |
-| `decrypt [-e env] [-p password] [-f]` | Decrypt the `.enc` file into the mapped local file. |
-| `rotate-key [-e env] [-o old] [-n new]` | Re-encrypt with a new password, a fresh salt and a fresh IV. |
-| `diff [-e env] [-p password] [--exit-code]` | Show **key names** that were added / removed / changed. Values are never printed. |
-| `set <KEY=value \| KEY>... [-e env] [-p password]` | Set variables in the vault and your local file. A bare `KEY` asks for a hidden value (or reads stdin). |
-| `get <KEY> [-e env] [-p password]` | Print one variable from the vault. Exits 1 if it is not set. |
-| `unset <KEY>... [-e env] [-p password]` | Remove variables from the vault and your local file. |
-| `run [-e env] [-p password] [--override] -- <command>` | Run a command with the decrypted variables set. Nothing is written to disk. |
-| `check [-e a,b,c] [-p password]` | List variables that exist in one environment but are missing in another (names only). Exits 1 if any are missing. |
-| `hooks install` / `hooks uninstall` | Add Git hooks that block plaintext commits and tell you when to share or download changes. |
-| `ui [--port n] [--no-open]` | Open the local web dashboard (see below). |
+| `dotcrypt status` | Show what changed in each environment and what to do next. No password needed. |
+| `dotcrypt init` | Create `.dotcrypt.json` and add ignore rules for plaintext env files to `.gitignore`. |
+| `dotcrypt encrypt` | Encrypt your local env file (e.g. `.env.staging`) into its `.enc` file. |
+| `dotcrypt decrypt` | Decrypt the `.enc` file into your local env file. |
+| `dotcrypt diff` | Show which variable **names** were added, removed or changed. Values are never printed. |
+| `dotcrypt set <KEY=value \| KEY>...` | Set variables in the `.enc` file and your local file. A bare `KEY` asks for a hidden value (or reads stdin). |
+| `dotcrypt get <KEY>` | Print one variable from the `.enc` file. Exits 1 if it is not set. |
+| `dotcrypt unset <KEY>...` | Remove variables from the `.enc` file and your local file. |
+| `dotcrypt run -- <command>` | Run a command with the decrypted variables set. Nothing is written to disk. |
+| `dotcrypt check` | List variables that exist in one environment but are missing in another. |
+| `dotcrypt rotate-key` | Re-encrypt with a new password. |
+| `dotcrypt hooks install` / `uninstall` | Add or remove Git hooks (see [Git hooks](#git-hooks)). |
+| `dotcrypt ui` | Open the local web dashboard. |
 
-If `-e` is omitted you are prompted to pick an environment (non-interactive runs fall back to
-`defaultEnvironment`).
+Run `dotcrypt <command> --help` for all options and examples.
 
-### Supplying passwords
+### Options
 
-Passwords are resolved in this order:
+| Option | Commands | Description |
+| --- | --- | --- |
+| `-e, --env <name>` | most commands | Environment to use. If omitted you are asked to pick one (non-interactive runs use the default environment). For `check`, a comma-separated list. |
+| `-p, --password <password>` | encrypt, decrypt, diff, set, get, unset, run, check | Password. Prefer a prompt or `DOTCRYPT_PASSWORD` (see [Passwords](#passwords)). |
+| `-f, --force` | init, encrypt, decrypt | Overwrite without asking. |
+| `--replace` | encrypt | Replace an `.enc` file that can't be opened with this password (see below). |
+| `-o, --old-password` / `-n, --new-password` | rotate-key | Current and new password. |
+| `--exit-code` | diff | Exit with 1 when differences are found. |
+| `--override` | run | Let values from the `.enc` file replace variables already set in your shell. |
+| `-q, --quiet` | run | Don't print the summary of injected variables. |
+| `-n, --name`, `--envs a,b,c`, `-d, --default-env`, `-y, --yes` | init | Project name, environment list, default environment, accept defaults. |
+| `--port <n>`, `--no-open` | ui | Fixed port; don't open the browser. |
 
-1. CLI flag (`-p`, `-o`, `-n`) — works, but prints a warning because flags leak into shell
-   history and process listings.
-2. Environment variable — `DOTCRYPT_PASSWORD` (and `DOTCRYPT_NEW_PASSWORD` for the new
-   password in `rotate-key`). Recommended for CI.
-3. Interactive masked prompt (recommended for humans). New passwords must be at least 12
-   characters and are asked twice.
+### Safety prompts
 
-### Overwrite protection
+dotcrypt asks before it overwrites anything:
 
-- `decrypt` never silently replaces a local file that differs from the vault: it shows which keys
-  would be lost/changed and asks for confirmation. Use `--force` to skip the prompt.
-- `encrypt` shows a key-level summary of what will change in the vault and asks before
-  overwriting. If the files are identical, nothing is written (no Git churn).
-- `encrypt` **verifies your password against the existing `.enc` file**. This prevents a
-  teammate from accidentally re-encrypting a shared vault with a different password. Change
-  passwords with `rotate-key`. To deliberately discard a vault file that is unreadable, belongs to
-  another environment, or uses a different password, pass `--replace` (`--force` alone never does
-  this). When the password was typed at a prompt, you must re-enter it before the vault is replaced.
-- `init` refuses to overwrite an existing `.dotcrypt.json` without confirmation or `--force`.
-- Non-interactive sessions (CI, pipes) never prompt; they fail safely unless `--force` is given.
+- `decrypt` shows which variables would be lost or changed in your local file and asks first.
+- `encrypt` shows what will change in the `.enc` file and asks first. If nothing changed, nothing
+  is written (no Git noise).
+- `encrypt` checks your password against the existing `.enc` file, so nobody accidentally
+  re-encrypts a shared file with a different password. Use `rotate-key` to change passwords. Only
+  `--replace` discards an `.enc` file that can't be opened (`--force` never does).
+- `init` won't overwrite an existing `.dotcrypt.json` without confirmation or `--force`.
+- In non-interactive sessions (CI, pipes) dotcrypt never prompts; it stops safely unless `--force`
+  is given.
 
 ### Exit codes
 
 | Code | Meaning |
 | --- | --- |
 | `0` | Success |
-| `1` | General error, aborted, or (`diff --exit-code`) differences found |
-| `2` | Wrong password or corrupted / tampered encrypted file |
+| `1` | Error, aborted, or differences / missing variables found (`diff --exit-code`, `check`, `get`) |
+| `2` | Wrong password, or the `.enc` file is corrupted or was tampered with |
 | `130` | Cancelled at a prompt (Ctrl+C) |
 
-## `.dotcrypt.json`
+## Passwords
+
+Each environment has its own password. dotcrypt looks for it in this order:
+
+1. **Command-line flag** (`-p`, `-o`, `-n`). Works, but prints a warning: flags end up in shell
+   history and process listings.
+2. **Environment variable** `DOTCRYPT_PASSWORD` (and `DOTCRYPT_NEW_PASSWORD` for the new password
+   in `rotate-key`). Recommended for CI.
+3. **Hidden prompt.** Recommended on your own machine.
+
+New passwords must be at least 12 characters and are asked twice. Use long random passphrases from
+a password manager, and a different password per environment.
+
+## CI, Docker and servers
+
+Use `run` so the secrets are never written to disk:
+
+```bash
+DOTCRYPT_PASSWORD="$VAULT_PASSWORD_PRODUCTION" dotcrypt run -e production -- npm start
+```
+
+`run` decrypts in memory, starts your command with the variables set, and passes through its exit
+code and signals. Variables already set in the environment win unless you add `--override`.
+`DOTCRYPT_PASSWORD` and `DOTCRYPT_NEW_PASSWORD` are removed before your command starts.
+
+If a tool really needs a file: `DOTCRYPT_PASSWORD=... dotcrypt decrypt -e production --force`.
+
+Check in CI that no environment is missing a variable:
+
+```bash
+DOTCRYPT_PASSWORD="$VAULT_PASSWORD" dotcrypt check
+```
+
+## Web dashboard
+
+```bash
+cd path/to/your-project
+dotcrypt ui                  # opens your browser on a random free port
+dotcrypt ui --port 4600      # fixed port
+dotcrypt ui --no-open        # only print the URL
+```
+
+The terminal prints a URL like `http://127.0.0.1:53412/?token=3f9c…` and opens it. If the browser
+doesn't open, copy the **full** URL (including `?token=`). Keep the terminal open while you use the
+dashboard and press **Ctrl+C** to stop it.
+
+The dashboard shows:
+
+- one card per environment with its status in plain words and one button for the next step
+  (**Share changes**, **Get latest**, **Review**, ...)
+- the exact Git command to share an updated `.enc` file, with a copy button
+- Git safety checks: whether plaintext files are ignored or (dangerously) tracked, with a one-click
+  fix for missing `.gitignore` rules
+- **Missing variables** across environments (names only, never values)
+- an activity log for the session
+
+Less common actions (compare, force share or get, change password, make default) are in each
+card's **⋯** menu. The dashboard refreshes every few seconds, so changes from the terminal or
+`git pull` show up automatically.
+
+The dashboard only listens on `127.0.0.1`, needs the per-run token in the URL, and never sends
+secret values to the browser. Each run creates a new token, so old URLs stop working after a
+restart. Don't share the printed URL.
+
+## Git hooks
+
+```bash
+dotcrypt hooks install
+```
+
+Run once per clone (hooks aren't shared through Git). It adds dotcrypt to the `pre-commit`,
+`post-merge` and `post-checkout` hooks, keeping any existing hooks and respecting
+`core.hooksPath`:
+
+- **Before a commit:** blocks the commit if it includes a plaintext env file such as `.env` or
+  `.env.local`, and reminds you about changes you haven't shared yet.
+- **After `git pull` or switching branches:** tells you when teammates changed secrets and which
+  command gets them.
+
+If dotcrypt isn't installed, the hooks do nothing. `git commit --no-verify` skips the check.
+`dotcrypt hooks uninstall` removes them.
+
+Using husky? Add `npx dotcrypt hook pre-commit` to `.husky/pre-commit` and
+`npx dotcrypt hook post-merge` to `.husky/post-merge` instead.
+
+## Configuration (`.dotcrypt.json`)
+
+`dotcrypt init` creates this file. Commit it; it contains no secrets.
 
 ```json
 {
@@ -131,125 +316,61 @@ Passwords are resolved in this order:
 }
 ```
 
-You may edit mappings by hand (e.g. `"file": "apps/api/.env"`). Validation rules:
+You can edit the mappings by hand, for example `"file": "apps/api/.env"` in a monorepo. Rules:
 
-- Environment names: 1–64 chars of letters, digits, `-`, `_`.
-- Paths must be relative and stay inside the project (no absolute paths, no `..` escapes).
+- Environment names: 1–64 letters, digits, `-` or `_`.
+- Paths must be relative and stay inside the project (no absolute paths, no `..`).
 - `encryptedFile` must end in `.enc`; `file` must not.
-- No two mappings may share a path (compared case-insensitively).
+- Two mappings can't use the same path (case-insensitive).
 
-Custom plaintext paths that the default `.env` / `.env.*` rules don't cover are added to
-`.gitignore` explicitly the next time you run `init`.
-
-## Team workflow
-
-The idea in one sentence: **your secrets live in normal `.env` files; you share them by
-encrypting them into `.enc` files and pushing those through Git.**
-
-The easiest way to work is the dashboard (`dotcrypt ui`). Each environment card says in plain
-words what state it is in and shows one button for the next step. `dotcrypt status` shows the
-same thing in the terminal.
-
-**Setting up (once, by one person):**
-
-1. Run `dotcrypt init` (or open `dotcrypt ui` and click through the setup).
-2. Create your `.env` files as usual and click **Share with team** on each card (or run
-   `dotcrypt encrypt -e <env>`). You choose a password per environment.
-3. Commit and push `.dotcrypt.json`, `.gitignore` and the `.enc` files. The card shows the exact
-   command.
-4. Give teammates the passwords privately (a password manager, not chat or the repo).
-
-**You added or changed a variable:**
-
-1. Edit the `.env` file in your editor.
-2. The card now says **You have unshared changes**. Click **Share changes**
-   (CLI: `dotcrypt encrypt -e <env>`).
-3. Commit and push the `.enc` file. The card shows the command, for example:
-   `git add .env.development.enc && git commit -m "Update development secrets" && git push`.
-
-Shortcut for a single variable: `dotcrypt set API_URL=https://api.example.com -e development`
-updates the `.enc` file and your local file in one go (use `dotcrypt set STRIPE_KEY` to type a
-secret at a hidden prompt). Then commit and push the `.enc` file as above.
-
-**A teammate changed something:**
-
-1. `git pull`.
-2. The card says **New changes from your team**. Click **Get latest**
-   (CLI: `dotcrypt decrypt -e <env>`).
-
-**A new teammate joins:** they clone the repo, run `npx dotcrypt ui`, click **Get secrets** on
-each card, and enter the password you gave them.
-
-**Both of you changed the same environment:** the card says **Changed on both sides**. Click
-**Review** to see which variable names differ, then choose **Keep mine and share it** or **Use
-team's version**. If you need parts of both, copy the missing variables into your file first,
-then keep yours.
-
-### Git hooks (recommended)
-
-Run `dotcrypt hooks install` once in your clone. It adds a few lines to the `pre-commit`,
-`post-merge` and `post-checkout` hooks (existing hooks are kept, `core.hooksPath` is respected):
-
-- **Before a commit:** the commit is blocked if it includes a plaintext env file such as `.env`
-  or `.env.local`. You also get a reminder when you have changes you have not shared yet.
-- **After `git pull` or a branch switch:** you are told when teammates changed secrets, and
-  which command gets them.
-
-Hooks are not shared through Git, so each teammate runs `dotcrypt hooks install` once. If
-dotcrypt is not installed, the hooks do nothing. `git commit --no-verify` skips the check.
-`dotcrypt hooks uninstall` removes them. With husky, add `npx dotcrypt hook pre-commit` to
-`.husky/pre-commit` (and `npx dotcrypt hook post-merge` to `.husky/post-merge`) instead.
+Run `dotcrypt init` again after adding custom paths so they are added to `.gitignore`.
 
 ### How dotcrypt knows what changed
 
-`.enc` files are re-encrypted with a fresh random IV every time, so comparing timestamps or file
-contents can't tell who changed what. Instead, every time you share, get, or compare an
-environment, dotcrypt records fingerprints (SHA-256) of both files at that moment in
-`.git/dotcrypt/sync-state.json`. That file is local to your clone and never committed. Later it
-compares the current files with those fingerprints:
+`.enc` files are different every time they are encrypted, so dotcrypt can't compare them directly.
+Instead, whenever you encrypt, decrypt or diff, it records fingerprints (SHA-256) of both files in
+`.git/dotcrypt/sync-state.json`. This file stays in your clone and is never committed. That is
+why `status` and the dashboard can show what changed without a password.
 
-| State | Meaning | Next step |
-| --- | --- | --- |
-| Up to date | Neither file changed since your last sync. | Nothing. |
-| You have unshared changes | Your `.env` changed. | Share, then commit and push. |
-| New changes from your team | The `.enc` changed (e.g. after `git pull`). | Get latest. |
-| Changed on both sides | Both changed. | Review and choose a version. |
-| Not shared yet / Ready to download | Only one of the two files exists. | Share / Get secrets. |
-| Not checked yet | No fingerprint yet (e.g. first run on an existing checkout). | Compare once with the password. |
+## Troubleshooting
 
-Neither the dashboard nor `status` needs a password to show these states.
+| Problem | Fix |
+| --- | --- |
+| `Decryption failed: the password is incorrect, or the encrypted file is corrupted…` (exit code 2) | Check you're using the password for **this** environment. A file that was edited or swapped with another environment's `.enc` file also fails. |
+| `encrypt` refuses because the password doesn't match the existing `.enc` file | Use the shared password, or `rotate-key` to change it. Only use `--replace` if you really want to discard the existing file. |
+| Warning that a plaintext file is tracked by Git | Run `git rm --cached <file>`, commit, and make sure `.gitignore` covers it (`dotcrypt init` adds the rules). Rotate any secrets that were pushed. |
+| Dashboard says "Session token missing or expired" | Open the URL printed by the current `dotcrypt ui` run (tokens change on every start). |
+| Status shows "Not checked yet on this machine" | Run `dotcrypt diff -e <env>` once with the password. |
+| Windows PowerShell: "running scripts is disabled on this system" | Use `npx.cmd dotcrypt ...` / `npm.cmd install -g dotcrypt`, or run from Command Prompt. |
 
-**Someone leaves the team / password leaked:**
+## Security
 
-```bash
-dotcrypt rotate-key -e production
-git commit -am "Rotate production vault password" && git push
-```
+### What it protects
 
-> ⚠️ Rotating the password does **not** revoke secrets. Anyone who had the old password can still
-> decrypt old versions of the `.enc` file from Git history. After a departure or leak, rotate the
-> **underlying secrets** (API keys, DB passwords) too, then re-encrypt.
+- Protects secrets **at rest in Git** (your hosting provider, forks, leaked clones) from anyone
+  without the password.
+- Does **not** protect against a compromised developer machine, or against anyone who has the
+  password. Old `.enc` files in Git history stay readable with old passwords.
+- It is not a full secrets manager (no per-user access control, audit logs or automatic rotation).
+  It is designed for small, trusted teams.
 
-**Merge conflicts in `.enc` files:** encrypted files can't be merged textually. Resolve by taking
-one side (`git checkout --theirs .env.x.enc`), running `decrypt`, re-applying your changes to the
-plaintext file, and running `encrypt` again.
+### Encryption
 
-**CI, Docker and servers:** use `run` so the plaintext never touches the disk.
+- **AES-256-GCM** (authenticated encryption) from Node's built-in `crypto` module, with a 128-bit
+  authentication tag.
+- **scrypt** key derivation (`N=2^15, r=8, p=1`, ~32 MiB). Passwords are Unicode-normalized so the
+  same password works on every OS and keyboard.
+- A **new random salt and IV** on every `encrypt` and `rotate-key`.
+- The file header (format version, algorithm, KDF parameters, salt, IV, environment name, source
+  file, timestamp) is **authenticated** together with the ciphertext. Editing it, or copying
+  `staging.enc` over `production.enc`, makes decryption fail.
+- KDF parameters, field lengths and file sizes (max 5 MiB) are validated before decrypting, to
+  block downgrade and denial-of-service tricks.
+- A wrong password and a tampered file give the same error, and no partial plaintext is ever
+  written.
+- Keys, passwords and plaintext buffers are wiped from memory after use (best effort).
 
-```bash
-DOTCRYPT_PASSWORD="$VAULT_PASSWORD_PRODUCTION" dotcrypt run -e production -- npm start
-```
-
-`run` decrypts in memory, starts the command with the variables set, and passes through its exit
-code and signals. Variables already set in the shell win unless you pass `--override`. The
-password variables (`DOTCRYPT_PASSWORD`, `DOTCRYPT_NEW_PASSWORD`) are removed from the command's
-environment. If a tool really needs a file, `decrypt --force` still works.
-
-## Security architecture
-
-### Encrypted file format
-
-Each `.enc` file is a JSON envelope:
+Each `.enc` file is a JSON document:
 
 ```json
 {
@@ -267,142 +388,34 @@ Each `.enc` file is a JSON envelope:
 }
 ```
 
-### Cryptographic design
+### Files on disk
 
-- **Cipher:** AES-256-GCM (authenticated encryption) via `node:crypto`, 128-bit auth tag
-  enforced with `authTagLength` on both encrypt and decrypt.
-- **Key derivation:** `crypto.scryptSync` → 256-bit key. Default cost `N=2^15, r=8, p=1`
-  (~32 MiB, OWASP baseline). Passwords are Unicode NFC-normalized so the same password works on
-  every OS/keyboard.
-- **Fresh randomness every run:** a new 32-byte salt and new 16-byte IV come from the CSPRNG
-  (`crypto.randomBytes`) on every `encrypt` and `rotate-key`. IVs are never fixed, reused, or
-  derived; because the key is also fresh per salt, (key, IV) reuse is cryptographically
-  negligible.
-- **Authenticated header (AAD):** the format version, algorithm, all KDF parameters, salt, IV,
-  and metadata (environment, source file, timestamp) are bound to the ciphertext as GCM
-  Additional Authenticated Data. Any modification — including swapping `staging.enc` into
-  `production.enc` or editing the environment label — fails authentication.
-- **Environment binding:** on decrypt, the authenticated `metadata.environment` must match the
-  requested environment.
-- **Downgrade / DoS resistance:** KDF parameters read from files are bounds-checked (N must be a
-  power of two in `[2^14, 2^20]`, `r ∈ [8, 32]`, `p ∈ [1, 16]`, memory ≤ 256 MiB). Base64 fields,
-  salt/IV/tag lengths, and file sizes (5 MiB) are strictly validated before any crypto runs.
-- **Uniform failure:** a wrong password and a tampered file produce the same error (GCM cannot and
-  should not distinguish them); no partial plaintext is ever written.
-- **Key hygiene:** derived keys, password byte buffers and plaintext buffers are zeroed after use
-  (best-effort in a garbage-collected runtime).
+- Files are written atomically (temp file, `fsync`, rename), so a crash never leaves a half-written
+  `.env` or `.enc` file.
+- Decrypted files are created readable by you only (mode `0600`).
+- All paths from `.dotcrypt.json` must stay inside the project, and dotcrypt refuses to follow
+  symlinks out of it. A malicious repository can't make `decrypt` overwrite `~/.bashrc` or make
+  `encrypt` pick up `~/.ssh/id_rsa`.
+- `init` adds `.env`, `.env.*` and `!.env.*.enc` to `.gitignore` without touching your existing
+  rules. `encrypt` and `decrypt` warn if a plaintext file is tracked by Git or not ignored.
+- `diff`, `check` and the confirmation prompts only ever print variable names, never values.
 
-### Filesystem safety
+### Dashboard
 
-- **Atomic writes:** output is written to an exclusive (`wx`) temp file, `fsync`ed, then renamed
-  over the target, so crashes never leave truncated `.env` or `.enc` files.
-- **Restrictive permissions:** decrypted plaintext files are created with mode `0600`.
-- **Path confinement:** all paths from `.dotcrypt.json` must resolve inside the project root.
-- **Symlink protection:** the tool refuses to read or write through symlinks, or through
-  symlinked directories that resolve outside the project. A malicious repository therefore can't
-  make `decrypt` overwrite e.g. `~/.bashrc`, or make `encrypt` pull `~/.ssh/id_rsa` into a
-  committed file.
-- **Git hygiene:** `init` appends `.env`, `.env.*` and `!.env.*.enc` (plus explicit entries for
-  custom paths) to `.gitignore` without touching existing rules. `encrypt`/`decrypt` warn loudly if
-  a plaintext file is tracked by Git or not ignored.
-- **No secret output:** `diff` and the overwrite summaries print key names only; key names are
-  sanitized of control characters to prevent terminal escape injection.
+- Listens on `127.0.0.1` only.
+- A new random 256-bit token is required on every request. The browser keeps it in
+  `sessionStorage` and removes it from the address bar.
+- Requests from other hosts or origins are rejected (DNS-rebinding and CSRF protection), with a
+  strict Content Security Policy and no-cache headers.
+- Only metadata and variable names are sent to the browser. Passwords stay in the tab's memory
+  (the **Lock** button clears them) and are never stored.
 
-### Threat model & limitations
+## Contributing
 
-- Protects secrets **at rest in Git** (hosting provider, forks, leaked clones) against anyone
-  without the password.
-- Does **not** protect against a compromised developer machine, or against someone who holds the
-  password. Old ciphertexts in Git history remain decryptable with old passwords.
-- Security depends on password strength. Use long random passphrases from a password manager and a
-  separate password per environment.
-- Not a replacement for a full secrets manager (per-user access control, audit logs, automatic
-  rotation). It is designed for small, trusted teams.
-
-## Web dashboard
-
-### Opening the dashboard
-
-1. Make sure you ran `npm run setup` (or `npm run build:ui`) once in this repository.
-2. In a terminal, go to the project whose env files you want to manage (the folder with
-   `.dotcrypt.json`, or any folder if you want to create one from the dashboard).
-3. Run:
-
-   ```bash
-   dotcrypt ui                      # random free port, opens your browser
-   dotcrypt ui --port 4600          # fixed port
-   dotcrypt ui --no-open            # just print the URL
-   ```
-
-4. The terminal prints a URL like `http://127.0.0.1:53412/?token=3f9c…`. Your browser opens it
-   automatically; if it does not, copy the **full** URL (including `?token=`) into your browser.
-5. Leave the terminal open while you use the dashboard. Press **Ctrl+C** to stop it.
-
-Each run creates a new token, so old URLs stop working after a restart. If the page says
-"Session token missing or expired", open the URL from the current run again. If it says the
-dashboard assets are not built, run `npm run build:ui` in this repository.
-
-### What it does
-
-A local dashboard built with React, [shadcn/ui](https://ui.shadcn.com) (Base UI primitives) and
-Tailwind. It shows:
-
-- a short "How sharing works" guide (hide it, and reopen it from **How it works** in the header)
-- one card per environment with a plain-language state (see [Team workflow](#how-dotcrypt-knows-what-changed))
-  and a single button for the next step: **Share changes**, **Get latest**, **Review**, ...
-- the Git command to send a shared `.enc` file to your team (with a copy button), and a hint when a
-  teammate pushed something newer
-- Git safety: whether plaintext files are ignored or (dangerously) tracked, and a one-click fix for
-  missing `.gitignore` rules
-- **Missing variables**: compares the variable names of your environments and lists the ones that
-  exist in one but not in another (for example a key you added to development and forgot in
-  production). Values are never shown.
-- an activity log for the session
-
-Less common actions (compare, force share or get, change password, make default) are in each
-card's **⋯** menu. Changes that overwrite a file show the variable names involved and ask for
-confirmation, just like the CLI. The dashboard refreshes every 5 seconds, so changes made in the terminal or by `git pull`
-show up automatically.
-
-### Dashboard security model
-
-- **Loopback only.** The server binds to `127.0.0.1` and never to `0.0.0.0`.
-- **Per-run secret token.** A random 256-bit token is generated on every start and required as a
-  bearer token on every API call, compared in constant time. The browser moves it from the URL into
-  `sessionStorage` and removes it from the address bar. Do not share the printed URL.
-- **DNS-rebinding and CSRF protection.** Requests whose `Host` is not `127.0.0.1:<port>` or
-  `localhost:<port>` are rejected (421). Writes require `Content-Type: application/json`, a matching
-  `Origin`, and a same-origin `Sec-Fetch-Site`.
-- **Strict headers.** A restrictive CSP (`script-src 'self'`, `frame-ancestors 'none'`, …),
-  `X-Frame-Options: DENY`, `nosniff`, `no-referrer`, and `Cache-Control: no-store` on API responses.
-- **No secret values leave the server.** The API returns metadata and key names only. Passwords are
-  sent per request, held only in the tab's memory (the **Lock** button clears them), and never
-  stored in `localStorage` or on disk. Request bodies are capped at 64 KB.
-
-### Developing the dashboard
-
-```bash
-# terminal 1, inside any project with a vault
-dotcrypt ui --port 4600 --no-open        # note the token it prints
-# terminal 2, in this repository
-VAULT_API_PORT=4600 npm run dev:ui               # Vite on http://localhost:5173, /api is proxied
-# open http://localhost:5173/?token=<token>
-```
-
-UI code lives in `ui/src` (`App.tsx`, `components/`, `lib/api.ts`). Add more shadcn components with
-`npx shadcn@latest add <component>` from the `ui/` directory.
-
-## Development
-
-```bash
-npm install
-npm test
-```
-
-Source layout: `src/crypto.js` (envelope format and AES-256-GCM/scrypt), `src/config.js`
-(`.dotcrypt.json`), `src/utils.js` (filesystem and Git safety), `src/vault.js` (operations shared
-by the CLI and dashboard), `src/server.js` (dashboard server), `bin/cli.js` (Commander CLI) and
-`ui/` (dashboard).
+Bug reports and pull requests are welcome on
+[GitHub](https://github.com/zubayerhimel/dotcrypt/issues). See
+[DEVELOPMENT.md](https://github.com/zubayerhimel/dotcrypt/blob/main/DEVELOPMENT.md) to run the
+project locally.
 
 ## License
 
